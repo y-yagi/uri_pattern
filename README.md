@@ -1,28 +1,98 @@
 # URIPattern
 
-TODO: Delete this and the text below, and describe your gem
+Ruby port of the [WHATWG URLPattern specification](https://urlpattern.spec.whatwg.org/).
 
-Welcome to your new gem! In this directory, you'll find the files you need to be able to package up your Ruby library into a gem. Put your Ruby code in the file `lib/uri_pattern`. To experiment with that code, run `bin/console` for an interactive prompt.
+It lets you match URLs against patterns that contain named groups, wildcards, optional segments, and custom regular expressions, and read the captured values back out — the same matching model the `URLPattern` API provides in browsers, adapted to Ruby conventions (snake_case, keyword arguments, and `nil` in place of `undefined`).
 
 ## Installation
 
-TODO: Replace `UPDATE_WITH_YOUR_GEM_NAME_IMMEDIATELY_AFTER_RELEASE_TO_RUBYGEMS_ORG` with your gem name right after releasing it to RubyGems.org. Please do not do it earlier due to security reasons. Alternatively, replace this section with instructions to install your gem from git if you don't plan to release to RubyGems.org.
-
-Install the gem and add to the application's Gemfile by executing:
+Install the gem and add it to the application's Gemfile by executing:
 
 ```bash
-bundle add UPDATE_WITH_YOUR_GEM_NAME_IMMEDIATELY_AFTER_RELEASE_TO_RUBYGEMS_ORG
+bundle add uri_pattern
 ```
 
 If bundler is not being used to manage dependencies, install the gem by executing:
 
 ```bash
-gem install UPDATE_WITH_YOUR_GEM_NAME_IMMEDIATELY_AFTER_RELEASE_TO_RUBYGEMS_ORG
+gem install uri_pattern
 ```
 
 ## Usage
 
-TODO: Write usage instructions here
+### Constructing a pattern
+
+A pattern can be built from a full URL pattern string, or from a hash of
+per-component pattern strings. Any component you omit defaults to the wildcard
+`*`.
+
+```ruby
+require "uri_pattern"
+
+# From a string
+pattern = URIPattern.new("https://example.com/users/:id")
+
+# From a hash of components
+pattern = URIPattern.new({ hostname: "example.com", pathname: "/users/:id" })
+
+# A relative pattern, resolved against a base URL
+pattern = URIPattern.new("/users/:id", "https://example.com")
+
+# Case-insensitive matching
+pattern = URIPattern.new("https://example.com/Users/:id", ignore_case: true)
+```
+
+### Testing for a match
+
+`#match?` returns a boolean and is the fastest way to check a URL:
+
+```ruby
+pattern = URIPattern.new("https://example.com/users/:id")
+
+pattern.match?("https://example.com/users/42")  # => true
+pattern.match?("https://example.com/posts/42")  # => false
+pattern.match?("https://other.com/users/42")    # => false
+```
+
+### Capturing values
+
+`#match` returns a `URIPattern::MatchResult` on success, or `nil` when the URL
+does not match. Each component exposes its matched `input` and named `groups`:
+
+```ruby
+pattern = URIPattern.new("https://example.com/users/:id")
+result  = pattern.match("https://example.com/users/42")
+
+result.pathname.input   # => "/users/42"
+result.pathname.groups  # => { "id" => "42" }
+result.hostname.input   # => "example.com"
+result.hostname.groups  # => {}
+
+pattern.match("https://other.com/users/42")  # => nil
+```
+
+Groups can be captured from any component, including the query string:
+
+```ruby
+pattern = URIPattern.new("https://example.com/search?q=:term")
+result  = pattern.match("https://example.com/search?q=ruby")
+
+result.query.groups  # => { "term" => "ruby" }
+```
+
+### Reading components back
+
+Each component reader returns the pattern string for that component:
+
+```ruby
+pattern = URIPattern.new("https://*.example.com/books/:id?")
+
+pattern.protocol  # => "https"
+pattern.hostname  # => "*.example.com"
+pattern.pathname  # => "/books/:id?"
+pattern.query     # => "*"
+pattern.fragment  # => "*"
+```
 
 ## Development
 
@@ -32,12 +102,8 @@ To install this gem onto your local machine, run `bundle exec rake install`. To 
 
 ## Contributing
 
-Bug reports and pull requests are welcome on GitHub at https://github.com/[USERNAME]/uri_pattern. This project is intended to be a safe, welcoming space for collaboration, and contributors are expected to adhere to the [code of conduct](https://github.com/[USERNAME]/uri_pattern/blob/main/CODE_OF_CONDUCT.md).
+Bug reports and pull requests are welcome on GitHub at https://github.com/y-yagi/uri_pattern.
 
 ## License
 
 The gem is available as open source under the terms of the [MIT License](https://opensource.org/licenses/MIT).
-
-## Code of Conduct
-
-Everyone interacting in the URIPattern project's codebases, issue trackers, chat rooms and mailing lists is expected to follow the [code of conduct](https://github.com/[USERNAME]/uri_pattern/blob/main/CODE_OF_CONDUCT.md).

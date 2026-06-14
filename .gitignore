@@ -6,3 +6,9 @@
 /pkg/
 /spec/reports/
 /tmp/
+Gemfile.lock
+.claude/
+.specify/
+specs
+CLAUDE.md
+AGENTS.md
