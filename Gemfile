@@ -6,5 +6,6 @@ source "https://rubygems.org"
 gemspec
 
 gem "irb"
+gem "debug"
 gem "test-unit"
 gem "rake"

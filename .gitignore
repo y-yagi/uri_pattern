@@ -6,3 +6,7 @@
 /pkg/
 /spec/reports/
 /tmp/
+.claude/
+.specify/
+specs
+CLAUDE.md
