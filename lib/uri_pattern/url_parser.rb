@@ -476,8 +476,18 @@ class URIPattern
       @input[start_token.index...token.index]
     end
 
+    # A protocol made of only scheme code points (no pattern metacharacters)
+    # compiles to an anchored exact-match regexp, so it is a special scheme iff it
+    # equals one verbatim (case-sensitive, like the regexp). Skip building a whole
+    # ComponentPattern + Regexp in that common case.
+    LITERAL_SCHEME_RE = /\A[a-zA-Z0-9+.\-]+\z/
+
     def compute_protocol_matches_special_scheme
       protocol_string = make_component_string
+      if protocol_string.match?(LITERAL_SCHEME_RE)
+        @protocol_special = URLParser::SPECIAL_SCHEMES_SET.include?(protocol_string)
+        return
+      end
       compiled = URIPattern::ComponentPattern.new(protocol_string, component: :protocol)
       @protocol_special = URLParser::SPECIAL_SCHEMES_SET.any? { |scheme| compiled.match(scheme) }
     rescue URIPattern::Error
