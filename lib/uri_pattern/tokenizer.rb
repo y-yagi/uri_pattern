@@ -2,7 +2,9 @@
 
 class URIPattern
   class Tokenizer
-    Token = Struct.new(:type, :value, :index, keyword_init: true)
+    # Positional (not keyword_init) Struct: tokenizing allocates one Token per
+    # character and keyword construction is markedly slower, so this is a hot path.
+    Token = Struct.new(:type, :value, :index)
 
     # A ":name" identifier follows the spec's "regexIdentifierStart" /
     # "regexIdentifierPart" (path-to-regex-modified):
@@ -89,7 +91,7 @@ class URIPattern
     private
 
     def emit(type, value)
-      @tokens << Token.new(type: type, value: value, index: @index)
+      @tokens << Token.new(type, value, @index)
     end
 
     def handle_invalid(reason)
@@ -154,7 +156,7 @@ class URIPattern
       return handle_invalid_group(start, "unbalanced regexp group") unless count.zero?
       return handle_invalid_group(start, "missing pattern in regexp group") if inner.empty?
 
-      @tokens << Token.new(type: :regexp, value: inner, index: start)
+      @tokens << Token.new(:regexp, inner, start)
       @index = j
     end
 
@@ -162,7 +164,7 @@ class URIPattern
       if @policy == :strict
         raise URIPattern::Error, "Invalid pattern at index #{at}: #{reason}"
       else
-        @tokens << Token.new(type: :invalid_char, value: @pattern[at], index: at)
+        @tokens << Token.new(:invalid_char, @pattern[at], at)
         @index = at + 1
       end
     end
