@@ -221,8 +221,8 @@ class URIPattern
       pattern = parts[key] || default_pattern(key, idx, base_components, base_url, last_specified)
       opaque = (key == :pathname) ? pathname_opaque : false
       component_ignore_case = ignore_case && IGNORE_CASE_COMPONENTS.include?(key)
-      [key, URIPattern::ComponentPattern.new(pattern, component: key,
-                                             ignore_case: component_ignore_case, opaque_path: opaque)]
+      [key, URIPattern::ComponentPattern.build(pattern, component: key,
+                                               ignore_case: component_ignore_case, opaque_path: opaque)]
     end
   end
 
