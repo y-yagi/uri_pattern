@@ -205,8 +205,15 @@ class URIPattern
     # dot segments collapse, matching the polyfill). A non-opaque run that is not
     # "/"-prefixed gets the spec's "/-" prefix trick so a leading "../" is preserved
     # rather than collapsed against the root.
+    # A non-opaque pathname run made only of these code points (note: no ".", so no
+    # dot-segments; no "?"/"#", so no termination; none in the path percent-encode
+    # set) is returned verbatim by the URL parser. Skipping a full URL parse for such
+    # runs — the common case, e.g. "/users/" — is a large construction-time win.
+    PATHNAME_VERBATIM_RE = %r{\A[A-Za-z0-9\-_~/]*\z}
+
     def canonicalize_pathname_run(run, opaque_path: false)
       return run if run.empty?
+      return run if !opaque_path && run.match?(PATHNAME_VERBATIM_RE)
       if opaque_path
         parsed = URI::WhatwgParser.new.split("data:#{run}")
         (parsed[WHATWG_OPAQUE_PATH] || parsed[WHATWG_PATH]).to_s
