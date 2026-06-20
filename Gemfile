@@ -5,7 +5,10 @@ source "https://rubygems.org"
 # Specify your gem's dependencies in uri_pattern.gemspec
 gemspec
 
-gem "irb"
+gem "benchmark-ips"
 gem "debug"
-gem "test-unit"
+gem "irb"
+gem "memory_profiler"
+gem "stackprof"
 gem "rake"
+gem "test-unit"
