@@ -2,7 +2,23 @@
 
 class URIPattern
   class ComponentPattern
-    attr_reader :pattern
+    # A pure-wildcard ("*") component compiles to the same regexp and pattern
+    # string regardless of component type (an asterisk token uses neither the
+    # segment regexp nor a delimiter), and the resulting object is immutable after
+    # init. So the default wildcard component — by far the most common one, since
+    # every unspecified component defaults to "*" — can be built once and shared.
+    @wildcard_cache = {}
+
+    # Return a ComponentPattern for +pattern_string+. The pure-wildcard, no-options
+    # case is served from a per-component cache to skip tokenize/compile/Regexp work.
+    def self.build(pattern_string, component:, ignore_case: false, opaque_path: false)
+      if pattern_string == "*" && !ignore_case && !opaque_path
+        @wildcard_cache[component] ||= new(pattern_string, component: component)
+      else
+        new(pattern_string, component: component,
+            ignore_case: ignore_case, opaque_path: opaque_path)
+      end
+    end
 
     def initialize(pattern_string, component:, ignore_case: false, opaque_path: false)
       tokens = Tokenizer.new(pattern_string, policy: :strict).tokenize
@@ -11,10 +27,20 @@ class URIPattern
                                opaque_path: opaque_path, ipv6: ipv6).compile
       @regexp = compiled[:regexp]
       @wildcard_name_map = compiled[:wildcard_name_map]
-      # The getter exposes the canonicalized "component pattern string", not the
-      # raw input (see PatternString).
-      @pattern = PatternString.generate(pattern_string, component: component,
-                                        opaque_path: opaque_path, ipv6: ipv6)
+      # Arguments retained so the "component pattern string" can be generated lazily
+      # on first #pattern access (see below).
+      @raw_pattern = pattern_string
+      @component = component
+      @opaque_path = opaque_path
+      @ipv6 = ipv6
+    end
+
+    # The canonicalized "component pattern string" (see PatternString), not the raw
+    # input. Generated lazily and memoized: generating it for every component at
+    # construction time dominated build cost, yet the getters are often never read.
+    def pattern
+      @pattern ||= PatternString.generate(@raw_pattern, component: @component,
+                                          opaque_path: @opaque_path, ipv6: @ipv6)
     end
 
     # WHATWG "hostname pattern is an IPv6 address": true when the pattern starts
