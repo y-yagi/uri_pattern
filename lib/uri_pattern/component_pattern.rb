@@ -51,6 +51,14 @@ class URIPattern
       str[0] == "[" || (str[0] == "{" && str[1] == "[")
     end
 
+    # A universal-wildcard component ("*") compiles to "(?<name>.*)", which matches
+    # any parsed component value (WHATWG URL parsing removes tab/newline and
+    # percent-encodes other controls, so values never contain "\n"). A boolean
+    # match? can therefore skip running the regexp for such components.
+    def universal?
+      @raw_pattern == "*"
+    end
+
     def match(string)
       @regexp.match(string)
     end

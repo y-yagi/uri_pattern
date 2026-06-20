@@ -48,7 +48,8 @@ class URIPattern
     return false unless components
 
     COMPONENT_KEYS.all? do |key|
-      @patterns[key].match(components[key] || "")
+      pat = @patterns[key]
+      pat.universal? || pat.match(components[key] || "")
     end
   rescue RegexpError => e
     raise URIPattern::Error, e.message
