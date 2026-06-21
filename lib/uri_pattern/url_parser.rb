@@ -187,7 +187,25 @@ class URIPattern
     # uri-whatwg_parser setters run the basic URL parser with the matching state
     # override and apply the spec encode sets (special-query for search, userinfo
     # for username/password, etc.).
+    #
+    # No-encode fast paths (cf. PATHNAME_NO_ENCODE_RE): each encode set acts per code
+    # point, and — unlike pathname — these components have no cross-character
+    # transform (no dot-segments). So a run made solely of code points that are NOT
+    # in the component's percent-encode set, and that carry no positional meaning,
+    # needs no encoding and is returned unchanged by the URL parser; we can skip the
+    # dummy-URL parse (~70x). Each class below is printable ASCII minus exactly that
+    # encode set:
+    #   search:   special-query set ("\"#'<>") + the "?" query terminator
+    #   hash:     fragment set ("\"#<>`")  ("#" cannot survive a fragment run)
+    #   userinfo: userinfo set ("\"#/:;<=>?@[\\]^`{|}"), used for username & password
+    # These classes were derived to equal the parser's true no-encode set exactly and
+    # confirmed identical over large random-run fuzzing; broaden only with re-checks.
+    SEARCH_NO_ENCODE_RE   = /\A[\x21-\x7e&&[^"#'<>?]]*\z/
+    HASH_NO_ENCODE_RE     = /\A[\x21-\x7e&&[^"#<>`]]*\z/
+    USERINFO_NO_ENCODE_RE = /\A[\x21-\x7e&&[^"#\/:;<=>?@\[\\\]^`{|}]]*\z/
+
     def canonicalize_search_run(run)
+      return run if run.match?(SEARCH_NO_ENCODE_RE)
       u = dummy_url
       u.query = run
       u.query.to_s
@@ -196,6 +214,7 @@ class URIPattern
     end
 
     def canonicalize_hash_run(run)
+      return run if run.match?(HASH_NO_ENCODE_RE)
       u = dummy_url
       u.fragment = run
       u.fragment.to_s
@@ -204,6 +223,7 @@ class URIPattern
     end
 
     def canonicalize_username_run(run)
+      return run if run.match?(USERINFO_NO_ENCODE_RE)
       u = dummy_url
       u.user = run
       u.user.to_s
@@ -212,6 +232,7 @@ class URIPattern
     end
 
     def canonicalize_password_run(run)
+      return run if run.match?(USERINFO_NO_ENCODE_RE)
       u = dummy_url
       u.password = run
       u.password.to_s
@@ -225,13 +246,14 @@ class URIPattern
     # state exactly as https://urlpattern.spec.whatwg.org/ defines.
     # A non-opaque pathname run made only of these code points (note: no ".", so no
     # dot-segments; no "?"/"#", so no termination; none in the path percent-encode
-    # set) is returned verbatim by the URL parser. Skipping the parse for such runs —
-    # the common case, e.g. "/users/" — is a large construction-time win.
-    PATHNAME_VERBATIM_RE = %r{\A[A-Za-z0-9\-_~/]*\z}
+    # set) needs no encoding and is returned unchanged by the URL parser. Skipping
+    # the parse for such runs — the common case, e.g. "/users/" — is a large
+    # construction-time win.
+    PATHNAME_NO_ENCODE_RE = %r{\A[A-Za-z0-9\-_~/]*\z}
 
     def canonicalize_pathname_run(run, opaque_path: false)
       return run if run.empty?
-      return run if !opaque_path && run.match?(PATHNAME_VERBATIM_RE)
+      return run if !opaque_path && run.match?(PATHNAME_NO_ENCODE_RE)
       if opaque_path
         # "canonicalize an opaque pathname": parse the run with OPAQUE PATH STATE as
         # the state override. uri-whatwg_parser has no opaque-path setter, but
