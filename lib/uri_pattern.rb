@@ -84,6 +84,10 @@ class URIPattern
     define_method(key) { @patterns[key].pattern }
   end
 
+  def inspect
+    "#<#{self.class} #{self}> protocol=#{protocol} username=#{username} password=#{password} hostname=#{hostname} port=#{port} pathname=#{pathname} query=#{query} fragment=#{fragment}"
+  end
+
   private
 
   def init_from_string(pattern_string, base_url, ignore_case:)
