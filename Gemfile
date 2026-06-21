@@ -8,6 +8,7 @@ gemspec
 gem "benchmark-ips"
 gem "debug"
 gem "irb"
+gem "irb-reload"
 gem "memory_profiler"
 gem "stackprof"
 gem "rake"
