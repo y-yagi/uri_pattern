@@ -12,6 +12,8 @@ class URIPattern
     # dedicated parsers; protocol (and anything else) passes through unchanged.
     def encode_run(run)
       case @component
+      when :protocol
+        URIPattern::URLParser.canonicalize_protocol_run(run)
       when :hostname
         @ipv6 ? canonicalize_ipv6(run) : canonicalize_hostname(run)
       when :port

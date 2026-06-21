@@ -147,6 +147,19 @@ class URIPattern
       value.downcase
     end
 
+    # "canonicalize a protocol" on a fixed pattern run. Unlike the other components,
+    # the spec explicitly does NOT use a state override here (the scheme setter would
+    # enforce restrictions inappropriate for a pattern fragment); instead it parses
+    # the run as the scheme of a dummy URL through the normal entry point and reads
+    # back the validated, lowercased scheme.
+    def canonicalize_protocol_run(run)
+      return run if run.empty?
+      parsed = URI::WhatwgParser.new.split("#{run}://dummy.invalid/")
+      parsed[WHATWG_SCHEME].to_s
+    rescue => e
+      raise URIPattern::Error, "Invalid protocol #{run.inspect}: #{e.message}"
+    end
+
     # --- "dummy URL" canonicalization of a fixed pattern run --------------------
     #
     # The WHATWG URLPattern spec canonicalizes each fixed-text part of a pattern by
@@ -159,8 +172,14 @@ class URIPattern
     # (https://urlpattern.spec.whatwg.org/ — "Let dummyInput be `https://dummy.invalid/`").
     DUMMY_URL = "https://dummy.invalid/"
 
+    # Parse the dummy URL once and hand out dups. Re-running the basic URL parser on
+    # every canonicalization is the dominant cost here (~13x a dup); the component
+    # setters reassign their ivars rather than mutating in place, so dups never
+    # corrupt the shared template (verified across all five setters).
+    DUMMY_URL_TEMPLATE = URI::WhatwgParser.new.parse(DUMMY_URL)
+
     def dummy_url
-      URI::WhatwgParser.new.parse(DUMMY_URL)
+      DUMMY_URL_TEMPLATE.dup
     end
 
     # "canonicalize a search" / "...hash" / "...username" / "...password": the
@@ -201,32 +220,40 @@ class URIPattern
     end
 
     # "canonicalize a pathname" / "canonicalize an opaque pathname": run the fixed
-    # text through a dummy URL via full parsing (so "#"/"?" terminate the path and
-    # dot segments collapse, matching the polyfill). A non-opaque run that is not
-    # "/"-prefixed gets the spec's "/-" prefix trick so a leading "../" is preserved
-    # rather than collapsed against the root.
+    # text through a dummy URL with the spec's per-component state override rather
+    # than a full URL parse, so the basic URL parser applies the path/opaque-path
+    # state exactly as https://urlpattern.spec.whatwg.org/ defines.
     # A non-opaque pathname run made only of these code points (note: no ".", so no
     # dot-segments; no "?"/"#", so no termination; none in the path percent-encode
-    # set) is returned verbatim by the URL parser. Skipping a full URL parse for such
-    # runs — the common case, e.g. "/users/" — is a large construction-time win.
+    # set) is returned verbatim by the URL parser. Skipping the parse for such runs —
+    # the common case, e.g. "/users/" — is a large construction-time win.
     PATHNAME_VERBATIM_RE = %r{\A[A-Za-z0-9\-_~/]*\z}
 
     def canonicalize_pathname_run(run, opaque_path: false)
       return run if run.empty?
       return run if !opaque_path && run.match?(PATHNAME_VERBATIM_RE)
       if opaque_path
+        # "canonicalize an opaque pathname": parse the run with OPAQUE PATH STATE as
+        # the state override. uri-whatwg_parser has no opaque-path setter, but
+        # parsing "data:" + run routes the run straight through opaque path state
+        # (which percent-encodes with the C0-control set and terminates on "?"/"#"
+        # regardless of state override), giving the identical result.
         parsed = URI::WhatwgParser.new.split("data:#{run}")
         (parsed[WHATWG_OPAQUE_PATH] || parsed[WHATWG_PATH]).to_s
       else
+        # "canonicalize a pathname": run the fixed text through the basic URL parser
+        # with PATH START STATE as the state override (uri-whatwg_parser's path=
+        # setter calls split(..., state_override: :path_start_state)). With the
+        # override set, "?"/"#" are part of the path and percent-encoded instead of
+        # terminating it. The spec prepends "/-" to a non-"/"-prefixed run so the
+        # parser does not add its own leading slash (and the "-" stops a leading dot
+        # from collapsing); both inserted characters are dropped from the result.
         lead = run.start_with?("/")
         modified = lead ? run : "/-#{run}"
-        # Append the run as the dummy URL's path. The run supplies its own leading
-        # "/", so drop DUMMY_URL's trailing slash before joining. Parsing the whole
-        # URL (rather than resolving the run against DUMMY_URL as a base) keeps a
-        # leading "//" a path instead of an authority, and lets "#"/"?" terminate.
-        parsed = URI::WhatwgParser.new.split(DUMMY_URL.chomp("/") + modified)
-        pathname = parsed[WHATWG_PATH].to_s
-        lead ? pathname : pathname.sub(%r{\A/-}, "")
+        u = dummy_url
+        u.path = modified
+        pathname = u.path.to_s
+        lead ? pathname : pathname[2..]
       end
     rescue => e
       raise URIPattern::Error, "Invalid pathname #{run.inspect}: #{e.message}"
@@ -492,7 +519,9 @@ class URIPattern
     def compute_protocol_matches_special_scheme
       protocol_string = make_component_string
       if protocol_string.match?(LITERAL_SCHEME_RE)
-        @protocol_special = URLParser::SPECIAL_SCHEMES_SET.include?(protocol_string)
+        # Schemes are case-insensitive: "canonicalize a protocol" lowercases, so
+        # compare the lowercased run against the special-scheme set.
+        @protocol_special = URLParser::SPECIAL_SCHEMES_SET.include?(protocol_string.downcase)
         return
       end
       compiled = URIPattern::ComponentPattern.new(protocol_string, component: :protocol)
