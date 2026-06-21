@@ -146,6 +146,23 @@ class TestURIPattern < Test::Unit::TestCase
     assert_equal "*",           p.protocol
   end
 
+  # A dictionary member is a USVString, so a non-string value is coerced with JS
+  # String() before parsing. For an array that is Array.prototype.join(","), which
+  # then flows through normal validation just like the browser.
+  def test_hash_array_value_coerced_like_js_string
+    # {pathname: ["/foo"]} -> "/foo"; {pathname: ["/foo","/bar"]} -> "/foo,/bar"
+    assert_equal "/foo",     URIPattern.new({ pathname: ["/foo"] }).pathname
+    assert_equal "/foo,/bar", URIPattern.new({ pathname: ["/foo", "/bar"] }).pathname
+  end
+
+  def test_hash_array_value_invalid_after_join_raises
+    # ["http","https"] joins to "http,https", an invalid protocol, so this raises
+    # exactly as the browser does for {protocol: ["http","https"]}.
+    assert_raises(URIPattern::Error) do
+      URIPattern.new({ protocol: ["http", "https"] })
+    end
+  end
+
   # Error handling
   def test_invalid_pattern_raises_error
     assert_raises(URIPattern::Error) do

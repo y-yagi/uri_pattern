@@ -119,12 +119,12 @@ class URIPattern
       raise URIPattern::Error, "base_url cannot be provided when input is a dictionary"
     end
     hash = normalize_hash_keys(hash)
-    effective_base = hash[:base_url]
+    effective_base = coerce_init_value(hash[:base_url])
     if effective_base && !valid_base_url?(effective_base)
       raise URIPattern::Error, "Invalid base_url: #{effective_base.inspect}"
     end
     parts = {}
-    COMPONENT_KEYS.each { |k| parts[k] = hash[k]&.to_s }
+    COMPONENT_KEYS.each { |k| parts[k] = coerce_init_value(hash[k]) }
     # "process protocol for init": a protocol value provided via a dictionary may
     # carry a single trailing ":" (e.g. "http{s}?:"), which is stripped before
     # compiling the component.
@@ -139,6 +139,18 @@ class URIPattern
       parts[:fragment] = parts[:fragment][1..]
     end
     build_patterns(parts, ignore_case: ignore_case, base_url: effective_base)
+  end
+
+  # A URLPatternInit member is a USVString, so JS coerces a non-string value with
+  # String() before it reaches component parsing. For an array that means
+  # Array.prototype.join(",") (e.g. ["http","https"] -> "http,https"), which then
+  # flows through normal validation and fails just like the browser does for
+  # {protocol: ["http","https"]}. Ruby's Array#to_s would instead produce inspect
+  # output ('["http", "https"]'), so join(",") is used to match JS String(). nil is
+  # left as nil (an absent / undefined dictionary member, not the string "").
+  def coerce_init_value(value)
+    return nil if value.nil?
+    value.is_a?(Array) ? value.join(",") : value.to_s
   end
 
   def normalize_hash_keys(hash)
