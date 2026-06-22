@@ -42,6 +42,24 @@ pattern = URIPattern.new("/users/:id", "https://example.com")
 pattern = URIPattern.new("https://example.com/Users/:id", ignore_case: true)
 ```
 
+Pattern strings may use the special `{ }` syntax to group a run of text
+together. A group acts as a single unit, so a modifier such as `?` (optional),
+`+` (one or more), or `*` (zero or more) placed after the closing brace applies
+to the whole group rather than to a single character:
+
+```ruby
+# "{s}?" makes the "s" optional, so the protocol matches both http and https
+pattern = URIPattern.new({ protocol: "http{s}?:" })
+pattern.match?("http://example.com")   # => true
+pattern.match?("https://example.com")  # => true
+
+# A group can wrap a named segment to make a whole path segment optional
+pattern = URIPattern.new({ pathname: "/books{/:id}?" })
+pattern.match?("https://example.com/books")      # => true
+pattern.match?("https://example.com/books/123")  # => true
+pattern.match("https://example.com/books/123").pathname.groups  # => { "id" => "123" }
+```
+
 ### Testing for a match
 
 `#match?` returns a boolean and is the fastest way to check a URL:
