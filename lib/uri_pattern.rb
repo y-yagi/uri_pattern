@@ -160,7 +160,6 @@ class URIPattern
       case sym
       when :search  then :query
       when :hash    then :fragment
-      when :baseURL then :base_url
       else sym
       end
     end
