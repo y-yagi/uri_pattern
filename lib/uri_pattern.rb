@@ -122,7 +122,7 @@ class URIPattern
     if base_url
       raise URIPattern::Error, "base_url cannot be provided when input is a dictionary"
     end
-    hash = normalize_hash_keys(hash)
+    hash = hash.transform_keys(&:to_sym)
     effective_base = coerce_init_value(hash[:base_url])
     if effective_base && !valid_base_url?(effective_base)
       raise URIPattern::Error, "Invalid base_url: #{effective_base.inspect}"
@@ -155,18 +155,6 @@ class URIPattern
   def coerce_init_value(value)
     return nil if value.nil?
     value.is_a?(Array) ? value.join(",") : value.to_s
-  end
-
-  def normalize_hash_keys(hash)
-    hash.transform_keys do |k|
-      sym = k.to_sym
-      # Map WPT/WHATWG alternative names to uri gem keys
-      case sym
-      when :search  then :query
-      when :hash    then :fragment
-      else sym
-      end
-    end
   end
 
   def build_patterns(parts, ignore_case:, base_url: nil)
@@ -355,7 +343,7 @@ class URIPattern
   end
 
   def parse_hash_input(input)
-    normalized = normalize_hash_keys(input)
+    normalized = input.transform_keys(&:to_sym)
     effective_base = normalized.delete(:base_url)
     raw = hash_input_components(normalized, effective_base)
     URIPattern::URLParser.normalize_hash_input(raw)
