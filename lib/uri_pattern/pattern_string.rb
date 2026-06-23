@@ -20,11 +20,15 @@ class URIPattern
     # \p{ID_Continue}, so only "$" needs to be added (avoids a duplicate-range warning).
     IDENTIFIER_PART = /[$\p{ID_Continue}]/u
 
+    MODIFIER_MAP = { "?" => :optional, "*" => :zero_or_more, "+" => :one_or_more }.freeze
+
     Part = Struct.new(:type, :name, :prefix, :value, :suffix, :modifier) do
       def custom_name?
         name.is_a?(String) && !name.empty?
       end
     end
+
+    AdaptedToken = Struct.new(:type, :value)
 
     def self.generate(pattern_string, component:, opaque_path: false, ipv6: false)
       new(pattern_string, component: component, opaque_path: opaque_path, ipv6: ipv6).generate
@@ -148,8 +152,6 @@ class URIPattern
       @parts << Part.new(:fixed, "", "", encode_part(@pending), "", :none)
       @pending = +""
     end
-
-    MODIFIER_MAP = { "?" => :optional, "*" => :zero_or_more, "+" => :one_or_more }.freeze
 
     def add_part(prefix, name_token, regexp_or_wildcard, suffix, modifier_token)
       modifier = MODIFIER_MAP.fetch(modifier_token, :none)
@@ -296,8 +298,6 @@ class URIPattern
     end
 
     # --- token adaptation --------------------------------------------------
-
-    AdaptedToken = Struct.new(:type, :value)
 
     # Convert our Tokenizer output into the flat token stream the parser expects.
     # A "(...)" group is already a single :regexp token (carrying the raw regexp

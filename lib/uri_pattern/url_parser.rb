@@ -7,6 +7,68 @@ class URIPattern
   module URLParser
     module_function
 
+    # Indices in the array returned by URI::WhatwgParser#split:
+    # [scheme, userinfo, host, port, nil, path, opaque_path, query, fragment]
+    WHATWG_SCHEME      = 0
+    WHATWG_USERINFO    = 1
+    WHATWG_HOST        = 2
+    WHATWG_PORT        = 3
+    WHATWG_PATH        = 5
+    WHATWG_OPAQUE_PATH = 6
+    WHATWG_QUERY       = 7
+    WHATWG_FRAGMENT    = 8
+
+    DEFAULT_PORTS = {
+      "http"  => 80,
+      "https" => 443,
+      "ws"    => 80,
+      "wss"   => 443,
+      "ftp"   => 21
+    }.freeze
+
+    SPECIAL_SCHEMES_SET = Set.new(%w[http https ws wss ftp file]).freeze
+
+    # --- "dummy URL" canonicalization of a fixed pattern run --------------------
+    #
+    # The WHATWG URLPattern spec canonicalizes each fixed-text part of a pattern by
+    # running it through a throwaway ("dummy") URL, so the URL parser applies the
+    # exact spec percent-encode set and (for pathname) dot-segment handling. We
+    # delegate here instead of maintaining encode-set tables by hand, which both
+    # simplifies the code and tracks the spec precisely.
+    #
+    # DUMMY_URL is the spec's "create a dummy URL" input verbatim
+    # (https://urlpattern.spec.whatwg.org/ — "Let dummyInput be `https://dummy.invalid/`").
+    DUMMY_URL = "https://dummy.invalid/"
+
+    # Parse the dummy URL once and hand out dups. Re-running the basic URL parser on
+    # every canonicalization is the dominant cost here (~13x a dup); the component
+    # setters reassign their ivars rather than mutating in place, so dups never
+    # corrupt the shared template (verified across all five setters).
+    DUMMY_URL_TEMPLATE = URI::WhatwgParser.new.parse(DUMMY_URL)
+
+    # No-encode fast paths (cf. PATHNAME_NO_ENCODE_RE): each encode set acts per code
+    # point, and — unlike pathname — these components have no cross-character
+    # transform (no dot-segments). So a run made solely of code points that are NOT
+    # in the component's percent-encode set, and that carry no positional meaning,
+    # needs no encoding and is returned unchanged by the URL parser; we can skip the
+    # dummy-URL parse (~70x). Each class below is printable ASCII minus exactly that
+    # encode set:
+    #   search:   special-query set ("\"#'<>") + the "?" query terminator
+    #   hash:     fragment set ("\"#<>`")  ("#" cannot survive a fragment run)
+    #   userinfo: userinfo set ("\"#/:;<=>?@[\\]^`{|}"), used for username & password
+    # These classes were derived to equal the parser's true no-encode set exactly and
+    # confirmed identical over large random-run fuzzing; broaden only with re-checks.
+    SEARCH_NO_ENCODE_RE   = /\A[\x21-\x7e&&[^"#'<>?]]*\z/
+    HASH_NO_ENCODE_RE     = /\A[\x21-\x7e&&[^"#<>`]]*\z/
+    USERINFO_NO_ENCODE_RE = /\A[\x21-\x7e&&[^"#\/:;<=>?@\[\\\]^`{|}]]*\z/
+
+    # A non-opaque pathname run made only of these code points (note: no ".", so no
+    # dot-segments; no "?"/"#", so no termination; none in the path percent-encode
+    # set) needs no encoding and is returned unchanged by the URL parser. Skipping
+    # the parse for such runs — the common case, e.g. "/users/" — is a large
+    # construction-time win.
+    PATHNAME_NO_ENCODE_RE = %r{\A[A-Za-z0-9\-_~/]*\z}
+
     def split_components(url, base_url: nil)
       url = resolve(url, base_url) if base_url && !url.empty?
       parsed = URI::WhatwgParser.new.split(url)
@@ -55,25 +117,6 @@ class URIPattern
       }
     end
 
-    # Indices in the array returned by URI::WhatwgParser#split:
-    # [scheme, userinfo, host, port, nil, path, opaque_path, query, fragment]
-    WHATWG_SCHEME      = 0
-    WHATWG_USERINFO    = 1
-    WHATWG_HOST        = 2
-    WHATWG_PORT        = 3
-    WHATWG_PATH        = 5
-    WHATWG_OPAQUE_PATH = 6
-    WHATWG_QUERY       = 7
-    WHATWG_FRAGMENT    = 8
-
-    DEFAULT_PORTS = {
-      "http"  => 80,
-      "https" => 443,
-      "ws"    => 80,
-      "wss"   => 443,
-      "ftp"   => 21
-    }.freeze
-
     # Normalize a port string for use as a match input component.
     # Strips tabs, takes leading numeric digits, and suppresses the default port.
     # Returns nil if the port string has no leading digits (parse failure).
@@ -85,8 +128,6 @@ class URIPattern
       default = DEFAULT_PORTS[protocol.to_s.downcase]
       default && default.to_s == digits ? "" : digits
     end
-
-    SPECIAL_SCHEMES_SET = Set.new(%w[http https ws wss ftp file]).freeze
 
     # Normalize a hostname: IDN, and strip CR/LF/tab.
     def normalize_hostname_input(hostname)
@@ -160,24 +201,8 @@ class URIPattern
       raise URIPattern::Error, "Invalid protocol #{run.inspect}: #{e.message}"
     end
 
-    # --- "dummy URL" canonicalization of a fixed pattern run --------------------
-    #
-    # The WHATWG URLPattern spec canonicalizes each fixed-text part of a pattern by
-    # running it through a throwaway ("dummy") URL, so the URL parser applies the
-    # exact spec percent-encode set and (for pathname) dot-segment handling. We
-    # delegate here instead of maintaining encode-set tables by hand, which both
-    # simplifies the code and tracks the spec precisely.
-    #
-    # DUMMY_URL is the spec's "create a dummy URL" input verbatim
-    # (https://urlpattern.spec.whatwg.org/ — "Let dummyInput be `https://dummy.invalid/`").
-    DUMMY_URL = "https://dummy.invalid/"
-
-    # Parse the dummy URL once and hand out dups. Re-running the basic URL parser on
-    # every canonicalization is the dominant cost here (~13x a dup); the component
-    # setters reassign their ivars rather than mutating in place, so dups never
-    # corrupt the shared template (verified across all five setters).
-    DUMMY_URL_TEMPLATE = URI::WhatwgParser.new.parse(DUMMY_URL)
-
+    # Hand out a dup of the pre-parsed dummy URL template for "dummy URL"
+    # canonicalization of a fixed pattern run.
     def dummy_url
       DUMMY_URL_TEMPLATE.dup
     end
@@ -187,23 +212,6 @@ class URIPattern
     # uri-whatwg_parser setters run the basic URL parser with the matching state
     # override and apply the spec encode sets (special-query for search, userinfo
     # for username/password, etc.).
-    #
-    # No-encode fast paths (cf. PATHNAME_NO_ENCODE_RE): each encode set acts per code
-    # point, and — unlike pathname — these components have no cross-character
-    # transform (no dot-segments). So a run made solely of code points that are NOT
-    # in the component's percent-encode set, and that carry no positional meaning,
-    # needs no encoding and is returned unchanged by the URL parser; we can skip the
-    # dummy-URL parse (~70x). Each class below is printable ASCII minus exactly that
-    # encode set:
-    #   search:   special-query set ("\"#'<>") + the "?" query terminator
-    #   hash:     fragment set ("\"#<>`")  ("#" cannot survive a fragment run)
-    #   userinfo: userinfo set ("\"#/:;<=>?@[\\]^`{|}"), used for username & password
-    # These classes were derived to equal the parser's true no-encode set exactly and
-    # confirmed identical over large random-run fuzzing; broaden only with re-checks.
-    SEARCH_NO_ENCODE_RE   = /\A[\x21-\x7e&&[^"#'<>?]]*\z/
-    HASH_NO_ENCODE_RE     = /\A[\x21-\x7e&&[^"#<>`]]*\z/
-    USERINFO_NO_ENCODE_RE = /\A[\x21-\x7e&&[^"#\/:;<=>?@\[\\\]^`{|}]]*\z/
-
     def canonicalize_search_run(run)
       return run if run.match?(SEARCH_NO_ENCODE_RE)
       u = dummy_url
@@ -244,13 +252,6 @@ class URIPattern
     # text through a dummy URL with the spec's per-component state override rather
     # than a full URL parse, so the basic URL parser applies the path/opaque-path
     # state exactly as https://urlpattern.spec.whatwg.org/ defines.
-    # A non-opaque pathname run made only of these code points (note: no ".", so no
-    # dot-segments; no "?"/"#", so no termination; none in the path percent-encode
-    # set) needs no encoding and is returned unchanged by the URL parser. Skipping
-    # the parse for such runs — the common case, e.g. "/users/" — is a large
-    # construction-time win.
-    PATHNAME_NO_ENCODE_RE = %r{\A[A-Za-z0-9\-_~/]*\z}
-
     def canonicalize_pathname_run(run, opaque_path: false)
       return run if run.empty?
       return run if !opaque_path && run.match?(PATHNAME_NO_ENCODE_RE)
@@ -291,6 +292,12 @@ class URIPattern
   class ConstructorStringParser
     NON_SPECIAL_CHAR_TYPES = %i[char escaped_char invalid_char].freeze
     SEARCH_PREFIX_BLOCKERS = %i[name regexp close asterisk].freeze
+
+    # A protocol made of only scheme code points (no pattern metacharacters)
+    # compiles to an anchored exact-match regexp, so it is a special scheme iff it
+    # equals one verbatim (case-sensitive, like the regexp). Skip building a whole
+    # ComponentPattern + Regexp in that common case.
+    LITERAL_SCHEME_RE = /\A[a-zA-Z0-9+.\-]+\z/
 
     def initialize(input, tokens)
       @input = input
@@ -531,12 +538,6 @@ class URIPattern
       start_token = safe_token(@component_start)
       @input[start_token.index...token.index]
     end
-
-    # A protocol made of only scheme code points (no pattern metacharacters)
-    # compiles to an anchored exact-match regexp, so it is a special scheme iff it
-    # equals one verbatim (case-sensitive, like the regexp). Skip building a whole
-    # ComponentPattern + Regexp in that common case.
-    LITERAL_SCHEME_RE = /\A[a-zA-Z0-9+.\-]+\z/
 
     def compute_protocol_matches_special_scheme
       protocol_string = make_component_string

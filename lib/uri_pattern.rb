@@ -35,6 +35,10 @@ class URIPattern
   # algorithm, which only mixes ignoreCaseOptions into pathname/search/hash).
   IGNORE_CASE_COMPONENTS = %i[pathname query fragment].freeze
 
+  # WHATWG "escape a pattern string": backslash-escape every code point that has
+  # special meaning in pattern syntax so the string matches literally.
+  PATTERN_ESCAPE_CHARS = "+*?:{}()\\"
+
   def initialize(input = {}, base_url = nil, ignore_case: false)
     if input.is_a?(Hash)
       init_from_hash(input, base_url, ignore_case: ignore_case)
@@ -326,9 +330,6 @@ class URIPattern
     false
   end
 
-  # WHATWG "escape a pattern string": backslash-escape every code point that has
-  # special meaning in pattern syntax so the string matches literally.
-  PATTERN_ESCAPE_CHARS = "+*?:{}()\\"
   def escape_pattern_string(str)
     str.each_char.map { |c| PATTERN_ESCAPE_CHARS.include?(c) ? "\\#{c}" : c }.join
   end

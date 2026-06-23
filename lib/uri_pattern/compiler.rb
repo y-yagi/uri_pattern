@@ -17,6 +17,20 @@ class URIPattern
     # capture). Shared by the top-level and in-group compile loops.
     LITERAL_TOKEN_TYPES = %i[char escaped_char invalid_char].freeze
 
+    WILDCARD_PREFIX = "_w"
+
+    # ECMAScript "v"-flag character classes support a "--" set-subtraction operator
+    # (e.g. "[[a-z]--a]" = "[a-z]" minus "a") that Ruby's regexp engine lacks. Ruby
+    # does support "&&" intersection, so rewrite "[A--B]" as "[A&&[^B]]".
+    V_CLASS_SUBTRACTION = /(\[[^\[\]]+\])--(\[[^\[\]]+\]|[^\]]+?)(?=\])/
+
+    # The spec compiles each custom regexp group as a Unicode-mode ECMAScript
+    # regexp, where an identity escape ("\\x" for a literal x) is only valid for a
+    # SyntaxCharacter, "/", or a recognized escape class. Letters like "m" or "H"
+    # have no such escape and make the whole pattern invalid, even though Ruby
+    # would silently accept them.
+    VALID_REGEXP_ESCAPE = /\A[\^$\\.*+?()\[\]{}|\/dDsSwWbBfnrtvcxukpP0-9]\z/
+
     include URIPattern::Canonicalization
 
     # Accumulate consecutive literal characters; flush_literals canonicalizes the
@@ -43,8 +57,6 @@ class URIPattern
       end
     end
 
-    WILDCARD_PREFIX = "_w"
-
     def initialize(tokens, component:, ignore_case: false, opaque_path: false, ipv6: false)
       @tokens = tokens
       @component = component
@@ -70,11 +82,6 @@ class URIPattern
     end
 
     private
-
-    # ECMAScript "v"-flag character classes support a "--" set-subtraction operator
-    # (e.g. "[[a-z]--a]" = "[a-z]" minus "a") that Ruby's regexp engine lacks. Ruby
-    # does support "&&" intersection, so rewrite "[A--B]" as "[A&&[^B]]".
-    V_CLASS_SUBTRACTION = /(\[[^\[\]]+\])--(\[[^\[\]]+\]|[^\]]+?)(?=\])/
 
     def translate_v_class_sets(source)
       source.gsub(V_CLASS_SUBTRACTION) do
@@ -366,12 +373,6 @@ class URIPattern
       inner.gsub(/\(\?<(?![=!])[^>]*>/, "(?:").gsub(/\(\?'[^']*'/, "(?:")
     end
 
-    # The spec compiles each custom regexp group as a Unicode-mode ECMAScript
-    # regexp, where an identity escape ("\\x" for a literal x) is only valid for a
-    # SyntaxCharacter, "/", or a recognized escape class. Letters like "m" or "H"
-    # have no such escape and make the whole pattern invalid, even though Ruby
-    # would silently accept them.
-    VALID_REGEXP_ESCAPE = /\A[\^$\\.*+?()\[\]{}|\/dDsSwWbBfnrtvcxukpP0-9]\z/
     def validate_regexp_escape(char)
       return if char.match?(VALID_REGEXP_ESCAPE)
       raise URIPattern::Error, "Invalid regexp escape \\#{char}"
