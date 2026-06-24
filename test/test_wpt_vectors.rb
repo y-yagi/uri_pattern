@@ -150,12 +150,29 @@ class TestWptVectors < Test::Unit::TestCase
     hash.transform_keys { |k| WPT_KEY_MAP.fetch(k, k) }
   end
 
+  # WPT keys that are intentionally never asserted: either the feature is
+  # deliberately unimplemented (hasRegExpGroups) or the key is not a component
+  # getter (the echoed "inputs" array). Any *other* unrecognised key is a typo or a
+  # newly-added WPT field and must fail loudly instead of being silently skipped.
+  IGNORED_WPT_KEYS = %w[inputs hasRegExpGroups].freeze
+
+  # Resolve a WPT component name to its component getter symbol. Returns nil for the
+  # intentionally-ignored keys above; for anything else not backed by a getter it
+  # fails the test, so a silent skip can never hide a coverage gap.
+  def component_reader(wpt_component, ctx)
+    reader = WPT_KEY_MAP.fetch(wpt_component, wpt_component).to_sym
+    return reader if URIPattern::COMPONENT_KEYS.include?(reader)
+
+    assert_includes IGNORED_WPT_KEYS, wpt_component,
+                    "unrecognised WPT key #{wpt_component.inspect} (typo or new field?)\n#{ctx}"
+    nil
+  end
+
   # expected_obj maps WPT component names to the canonicalized pattern string the
-  # corresponding getter must return. Non-getter keys are ignored.
+  # corresponding getter must return.
   def verify_expected_obj(uri_pattern, expected_obj, ctx)
     expected_obj.each do |wpt_component, exp_pattern|
-      reader = WPT_KEY_MAP.fetch(wpt_component, wpt_component).to_sym
-      next unless URIPattern::COMPONENT_KEYS.include?(reader)
+      reader = component_reader(wpt_component, ctx) or next
 
       assert_equal exp_pattern, uri_pattern.public_send(reader),
                    "#{wpt_component} pattern string mismatch\n#{ctx}"
@@ -166,8 +183,7 @@ class TestWptVectors < Test::Unit::TestCase
   # returns exactly the empty string.
   def verify_exactly_empty_components(uri_pattern, exactly_empty, ctx)
     exactly_empty.each do |wpt_component|
-      reader = WPT_KEY_MAP.fetch(wpt_component, wpt_component).to_sym
-      next unless URIPattern::COMPONENT_KEYS.include?(reader)
+      reader = component_reader(wpt_component, ctx) or next
 
       assert_equal "", uri_pattern.public_send(reader),
                    "#{wpt_component} expected to be exactly empty\n#{ctx}"
@@ -176,13 +192,23 @@ class TestWptVectors < Test::Unit::TestCase
 
   def verify_match_result(result, expected, ctx = nil)
     expected.each do |wpt_component, exp_val|
-      reader = WPT_KEY_MAP.fetch(wpt_component, wpt_component).to_sym
-      next unless result.respond_to?(reader)
+      reader = component_reader(wpt_component, ctx) or next
 
       comp = result.public_send(reader)
       assert_equal exp_val["input"], comp.input, "#{wpt_component}.input mismatch\n#{ctx}"
       exp_groups = exp_val["groups"] || {}
       assert_equal exp_groups, comp.groups,      "#{wpt_component}.groups mismatch\n#{ctx}"
+    end
+
+    # A named capture only ever appears in the component whose pattern declared it,
+    # so any component the expectation does not mention must carry no named groups.
+    # (Default/wildcard components legitimately expose auto-named numeric groups
+    # such as "0", which are allowed.) This catches a named capture leaking into an
+    # unasserted component, which the per-component checks above would otherwise miss.
+    verified = expected.keys.map { |k| WPT_KEY_MAP.fetch(k, k).to_sym }
+    (URIPattern::COMPONENT_KEYS - verified).each do |reader|
+      leaked = result.public_send(reader).groups.keys.reject { |k| k.match?(/\A\d+\z/) }
+      assert_empty leaked, "#{reader} carried unexpected named groups\n#{ctx}"
     end
   end
 
