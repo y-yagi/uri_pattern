@@ -68,6 +68,7 @@ class URIPattern
       @wildcard_name_map = {}
       @literal_buf = +""
       @seen_names = {}
+      @has_regexp_groups = false
     end
 
     def compile
@@ -78,7 +79,8 @@ class URIPattern
       rescue RegexpError => e
         raise URIPattern::Error, "Invalid pattern: #{e.message}"
       end
-      { regexp: regexp, names: @names_order, wildcard_name_map: @wildcard_name_map }
+      { regexp: regexp, names: @names_order, wildcard_name_map: @wildcard_name_map,
+        has_regexp_groups: @has_regexp_groups }
     end
 
     private
@@ -355,6 +357,10 @@ class URIPattern
     # captures so only URLPattern-level names surface. The tokenizer already enforced
     # the structural rules (balance, no capturing sub-groups, ASCII, non-empty).
     def regexp_inner(token)
+      # Every "(...)" custom-regexp group flows through here. Each such group is a
+      # spec "regexp" part, so the presence of any one makes the component (and thus
+      # the whole pattern) carry regexp groups.
+      @has_regexp_groups = true
       inner = token.value.to_s
       validate_regexp_escapes(inner)
       strip_named_captures(inner)

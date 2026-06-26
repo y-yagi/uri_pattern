@@ -112,6 +112,14 @@ pattern.query     # => "*"
 pattern.fragment  # => "*"
 ```
 
+`#has_regexp_groups?` reports whether any component contains a custom `(...)`
+regexp group:
+
+```ruby
+URIPattern.new("https://example.com/users/:id(\\d+)").has_regexp_groups?  # => true
+URIPattern.new("https://example.com/users/:id").has_regexp_groups?        # => false
+```
+
 ## Development
 
 After checking out the repo, run `bin/setup` to install dependencies. Then, run `rake test` to run the tests. You can also run `bin/console` for an interactive prompt that will allow you to experiment.

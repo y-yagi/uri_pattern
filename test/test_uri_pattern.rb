@@ -163,6 +163,32 @@ class TestURIPattern < Test::Unit::TestCase
     end
   end
 
+  # hasRegExpGroups
+  def test_has_regexp_groups_true_with_named_regexp_group
+    p = URIPattern.new("https://example.com/users/:id(\\d+)")
+    assert p.has_regexp_groups?
+  end
+
+  def test_has_regexp_groups_true_with_anonymous_regexp_group
+    p = URIPattern.new({ pathname: "/(\\d+)" })
+    assert p.has_regexp_groups?
+  end
+
+  def test_has_regexp_groups_true_in_non_pathname_component
+    p = URIPattern.new({ hostname: "(sub.)?example.com" })
+    assert p.has_regexp_groups?
+  end
+
+  def test_has_regexp_groups_false_for_named_and_wildcard_groups
+    # ":id" is a segment wildcard and "*" is a full wildcard; neither is a regexp group.
+    p = URIPattern.new("https://*.example.com/users/:id")
+    refute p.has_regexp_groups?
+  end
+
+  def test_has_regexp_groups_false_for_all_wildcards
+    refute URIPattern.new.has_regexp_groups?
+  end
+
   # Error handling
   def test_invalid_pattern_raises_error
     assert_raises(URIPattern::Error) do

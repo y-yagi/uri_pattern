@@ -40,16 +40,21 @@ class TestWptVectors < Test::Unit::TestCase
       expected = entry["expected_match"]
       expected_obj = entry["expected_obj"]
       exactly_empty = entry["exactly_empty_components"] || []
+      # Absent when the entry does not assert hasRegExpGroups; the :absent sentinel
+      # distinguishes that from an explicit `false`.
+      has_regexp_groups = entry.fetch("hasRegExpGroups", :absent)
 
       form = pattern_args.empty? || pattern_args[0].is_a?(Hash) ? "hash" : "str"
       define_method("test_wpt_#{idx}_#{form}") do
         omit("WPT ##{idx}: #{SKIP[idx]}") if SKIP.key?(idx)
-        run_wpt_entry(pattern_args, inputs, expected, expected_obj, exactly_empty, idx)
+        run_wpt_entry(pattern_args, inputs, expected, expected_obj, exactly_empty,
+                      has_regexp_groups, idx)
       end
     end
   end
 
-  def run_wpt_entry(pattern_args, inputs, expected, expected_obj, exactly_empty, idx)
+  def run_wpt_entry(pattern_args, inputs, expected, expected_obj, exactly_empty,
+                    has_regexp_groups, idx)
     ctx = wpt_context(idx, pattern_args, inputs, expected)
     pattern_input = build_pattern_input(pattern_args[0])
     # Trailing args are [base_url?, options?]: a base_url string precedes an options
@@ -94,6 +99,12 @@ class TestWptVectors < Test::Unit::TestCase
     # exactly_empty_components lists components whose pattern getter must be exactly
     # the empty string (e.g. a default port suppressed to "").
     verify_exactly_empty_components(uri_pattern, exactly_empty, ctx)
+
+    # hasRegExpGroups, when asserted, must match across the whole pattern.
+    unless has_regexp_groups == :absent
+      assert_equal has_regexp_groups, uri_pattern.has_regexp_groups?,
+                   "hasRegExpGroups mismatch\n#{ctx}"
+    end
 
     # Empty inputs list => no matching test, just verify construction succeeded
     if inputs.empty?
@@ -150,11 +161,11 @@ class TestWptVectors < Test::Unit::TestCase
     hash.transform_keys { |k| WPT_KEY_MAP.fetch(k, k) }
   end
 
-  # WPT keys that are intentionally never asserted: either the feature is
-  # deliberately unimplemented (hasRegExpGroups) or the key is not a component
-  # getter (the echoed "inputs" array). Any *other* unrecognised key is a typo or a
-  # newly-added WPT field and must fail loudly instead of being silently skipped.
-  IGNORED_WPT_KEYS = %w[inputs hasRegExpGroups].freeze
+  # expected_obj keys that are not per-component getters: only the echoed "inputs"
+  # array. Any other unrecognised key is a typo or a newly-added WPT field and must
+  # fail loudly instead of being silently skipped. ("hasRegExpGroups" is a top-level
+  # entry key, asserted as a whole-pattern property in run_wpt_entry, not here.)
+  IGNORED_WPT_KEYS = %w[inputs].freeze
 
   # Resolve a WPT component name to its component getter symbol. Returns nil for the
   # intentionally-ignored keys above; for anything else not backed by a getter it

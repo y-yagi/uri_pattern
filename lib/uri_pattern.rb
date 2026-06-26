@@ -88,6 +88,12 @@ class URIPattern
     define_method(key) { @patterns[key].pattern }
   end
 
+  # WHATWG "hasRegExpGroups": true when any component's pattern contains a custom
+  # "(...)" regexp group.
+  def has_regexp_groups?
+    @patterns.values.any?(&:has_regexp_groups?)
+  end
+
   def inspect
     "#<#{self.class} #{self}> protocol=#{protocol} username=#{username} password=#{password} hostname=#{hostname} port=#{port} pathname=#{pathname} query=#{query} fragment=#{fragment}"
   end

@@ -27,6 +27,7 @@ class URIPattern
                                opaque_path: opaque_path, ipv6: ipv6).compile
       @regexp = compiled[:regexp]
       @wildcard_name_map = compiled[:wildcard_name_map]
+      @has_regexp_groups = compiled[:has_regexp_groups]
       # Arguments retained so the "component pattern string" can be generated lazily
       # on first #pattern access (see below).
       @raw_pattern = pattern_string
@@ -57,6 +58,12 @@ class URIPattern
     # match? can therefore skip running the regexp for such components.
     def universal?
       @raw_pattern == "*"
+    end
+
+    # True when this component's pattern contains at least one custom "(...)" regexp
+    # group (a spec "regexp" part).
+    def has_regexp_groups?
+      @has_regexp_groups
     end
 
     def match(string)
