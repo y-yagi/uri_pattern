@@ -161,29 +161,24 @@ class TestWptVectors < Test::Unit::TestCase
     hash.transform_keys { |k| WPT_KEY_MAP.fetch(k, k) }
   end
 
-  # expected_obj keys that are not per-component getters: only the echoed "inputs"
-  # array. Any other unrecognised key is a typo or a newly-added WPT field and must
-  # fail loudly instead of being silently skipped. ("hasRegExpGroups" is a top-level
-  # entry key, asserted as a whole-pattern property in run_wpt_entry, not here.)
-  IGNORED_WPT_KEYS = %w[inputs].freeze
-
-  # Resolve a WPT component name to its component getter symbol. Returns nil for the
-  # intentionally-ignored keys above; for anything else not backed by a getter it
-  # fails the test, so a silent skip can never hide a coverage gap.
+  # Resolve a WPT component name to its component getter symbol. expected_obj should
+  # only ever name per-component getters; anything else is a typo or a newly-added
+  # WPT field, so fail loudly rather than silently skip it (which could hide a
+  # coverage gap). "hasRegExpGroups" is a top-level entry key asserted as a
+  # whole-pattern property in run_wpt_entry, not here.
   def component_reader(wpt_component, ctx)
     reader = WPT_KEY_MAP.fetch(wpt_component, wpt_component).to_sym
     return reader if URIPattern::COMPONENT_KEYS.include?(reader)
 
-    assert_includes IGNORED_WPT_KEYS, wpt_component,
-                    "unrecognised WPT key #{wpt_component.inspect} (typo or new field?)\n#{ctx}"
-    nil
+    flunk "unrecognised WPT key #{wpt_component.inspect} in expected_obj " \
+          "(typo or new field?)\n#{ctx}"
   end
 
   # expected_obj maps WPT component names to the canonicalized pattern string the
   # corresponding getter must return.
   def verify_expected_obj(uri_pattern, expected_obj, ctx)
     expected_obj.each do |wpt_component, exp_pattern|
-      reader = component_reader(wpt_component, ctx) or next
+      reader = component_reader(wpt_component, ctx)
 
       assert_equal exp_pattern, uri_pattern.public_send(reader),
                    "#{wpt_component} pattern string mismatch\n#{ctx}"
