@@ -317,7 +317,7 @@ class URIPattern
   # string or a relative reference is not valid.
   def valid_base_url?(base_url)
     return false if base_url.nil? || base_url.empty?
-    parsed = URI::WhatwgParser.new.split(base_url)
+    parsed = URI::WHATWG_PARSER.split(base_url)
     scheme = parsed[URIPattern::URLParser::WHATWG_SCHEME]
     !scheme.nil? && !scheme.empty?
   rescue
