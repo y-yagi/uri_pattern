@@ -168,10 +168,19 @@ class URIPattern
 
     validate_port!(parts[:port])
     parts = normalize_pattern_parts(parts, base_url)
-    pathname_opaque = opaque_pathname_context?(parts)
+
+    # Compile the protocol component once up front and reuse it both for the
+    # opaque-path determination and as the :protocol entry. When parts[:protocol]
+    # is set, compile_components would build exactly this pattern anyway (protocol
+    # is never ignore_case and never opaque), so this only removes the redundant
+    # tokenize/compile/Regexp build the opaque check used to throw away (matters
+    # for opaque patterns like "data:...").
+    protocol_pattern =
+      parts[:protocol] && URIPattern::ComponentPattern.build(parts[:protocol], component: :protocol)
+    pathname_opaque = opaque_pathname_context?(parts, protocol_pattern)
 
     @patterns = compile_components(parts, base_components, base_url:, ignore_case:,
-                                   pathname_opaque:)
+                                   pathname_opaque:, protocol_pattern:)
   end
 
   def validate_port!(port)
@@ -214,24 +223,26 @@ class URIPattern
 
   # An opaque path context occurs when the protocol is explicitly set, no authority
   # components are present, and the protocol pattern can't match any special scheme.
-  def opaque_pathname_context?(parts)
+  def opaque_pathname_context?(parts, protocol_pattern)
     return false unless parts[:protocol]
     return false unless authority_empty?(parts)
-    compiled_proto = URIPattern::ComponentPattern.new(parts[:protocol], component: :protocol)
-    SPECIAL_SCHEMES.none? { |s| compiled_proto.match(s) }
+    SPECIAL_SCHEMES.none? { |s| protocol_pattern.match(s) }
   end
 
   def authority_empty?(parts)
     %i[hostname username password port].all? { |k| parts[k].nil? || parts[k].empty? }
   end
 
-  def compile_components(parts, base_components, base_url:, ignore_case:, pathname_opaque:)
+  def compile_components(parts, base_components, base_url:, ignore_case:, pathname_opaque:, protocol_pattern:)
     # Hierarchical base_url fallback: components appearing *after* the last
     # explicitly-specified component (in COMPONENT_KEYS order) do not inherit from
     # the base — they are wildcarded. Only components at or before that boundary
     # fall back to the base URL value.
     last_specified = COMPONENT_KEYS.each_index.select { |idx| !parts[COMPONENT_KEYS[idx]].nil? }.max
     COMPONENT_KEYS.each_with_index.to_h do |key, idx|
+      # Reuse the protocol component already compiled in build_patterns.
+      next [key, protocol_pattern] if key == :protocol && protocol_pattern
+
       pattern = parts[key] || default_pattern(key, idx, base_components, base_url, last_specified)
       opaque = (key == :pathname) ? pathname_opaque : false
       component_ignore_case = ignore_case && IGNORE_CASE_COMPONENTS.include?(key)
@@ -317,7 +328,7 @@ class URIPattern
   # string or a relative reference is not valid.
   def valid_base_url?(base_url)
     return false if base_url.nil? || base_url.empty?
-    parsed = URI::WhatwgParser.new.split(base_url)
+    parsed = URI::WHATWG_PARSER.split(base_url)
     scheme = parsed[URIPattern::URLParser::WHATWG_SCHEME]
     !scheme.nil? && !scheme.empty?
   rescue

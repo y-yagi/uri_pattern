@@ -14,7 +14,15 @@ class URIPattern
     # part class adds only "$". Matching the spec here (rather than a permissive
     # "[\u{80}-\u{10FFFF}]") makes e.g. ":$foo" a name and rejects a name starting
     # with a non-ID_Start code point (e.g. ":🚲"), as the reference does.
-    IDENTIFIER_RE = /\A[$_\p{ID_Start}][$\p{ID_Continue}]*/u
+    # Anchored with "\G" (not "\A") so it can be matched positionally against the
+    # whole pattern at the char after ":" without slicing off a fresh tail string;
+    # "\G" matches at the search-start position passed to Regexp#match.
+    IDENTIFIER_RE = /\G[$_\p{ID_Start}][$\p{ID_Continue}]*/u
+
+    # Token types after which a "*" is a modifier (repeat) rather than a
+    # standalone wildcard. Frozen constant so the "*" branch does not allocate a
+    # fresh array per "*" character.
+    MODIFIABLE_PREV_TYPES = %i[close regexp name asterisk].freeze
 
     def initialize(pattern, policy: :lenient)
       @pattern = pattern
@@ -52,7 +60,7 @@ class URIPattern
           @index += 1
         when "*"
           prev = @tokens.last
-          if prev && %i[close regexp name asterisk].include?(prev.type)
+          if prev && MODIFIABLE_PREV_TYPES.include?(prev.type)
             emit(:other_modifier, ch)
           else
             emit(:asterisk, ch)
@@ -65,8 +73,7 @@ class URIPattern
           emit(:other_modifier, ch)
           @index += 1
         when ":"
-          rest = @pattern[(@index + 1)..]
-          if (m = IDENTIFIER_RE.match(rest))
+          if (m = IDENTIFIER_RE.match(@pattern, @index + 1))
             emit(:name, m[0])
             @index += 1 + m[0].length
           else

@@ -44,7 +44,7 @@ class URIPattern
     # every canonicalization is the dominant cost here (~13x a dup); the component
     # setters reassign their ivars rather than mutating in place, so dups never
     # corrupt the shared template (verified across all five setters).
-    DUMMY_URL_TEMPLATE = URI::WhatwgParser.new.parse(DUMMY_URL)
+    DUMMY_URL_TEMPLATE = URI::WHATWG_PARSER.parse(DUMMY_URL)
 
     # No-encode fast paths (cf. PATHNAME_NO_ENCODE_RE): each encode set acts per code
     # point, and — unlike pathname — these components have no cross-character
@@ -71,7 +71,7 @@ class URIPattern
 
     def split_components(url, base_url: nil)
       url = resolve(url, base_url) if base_url && !url.empty?
-      parsed = URI::WhatwgParser.new.split(url)
+      parsed = URI::WHATWG_PARSER.split(url)
       userinfo = parsed[WHATWG_USERINFO] || ""
       user, pass = userinfo.include?(":") ? userinfo.split(":", 2) : [userinfo, nil]
       {
@@ -91,7 +91,7 @@ class URIPattern
     end
 
     def resolve(relative, base_url)
-      URI::WhatwgParser.new.parse(relative, base: base_url).to_s
+      URI::WHATWG_PARSER.parse(relative, base: base_url).to_s
     rescue => e
       raise URIPattern::Error, "Failed to resolve URL: #{e.message}"
     end
@@ -134,7 +134,7 @@ class URIPattern
       return "" if hostname.nil? || hostname.empty?
       h = hostname.gsub(/[\r\n\t]/, "")
       return "" if h.empty?
-      URI::WhatwgParser.new.split("https://#{h}/")[WHATWG_HOST] || h
+      URI::WHATWG_PARSER.split("https://#{h}/")[WHATWG_HOST] || h
     rescue
       h
     end
@@ -195,7 +195,7 @@ class URIPattern
     # back the validated, lowercased scheme.
     def canonicalize_protocol_run(run)
       return run if run.empty?
-      parsed = URI::WhatwgParser.new.split("#{run}://dummy.invalid/")
+      parsed = URI::WHATWG_PARSER.split("#{run}://dummy.invalid/")
       parsed[WHATWG_SCHEME].to_s
     rescue => e
       raise URIPattern::Error, "Invalid protocol #{run.inspect}: #{e.message}"
@@ -261,7 +261,7 @@ class URIPattern
         # parsing "data:" + run routes the run straight through opaque path state
         # (which percent-encodes with the C0-control set and terminates on "?"/"#"
         # regardless of state override), giving the identical result.
-        parsed = URI::WhatwgParser.new.split("data:#{run}")
+        parsed = URI::WHATWG_PARSER.split("data:#{run}")
         (parsed[WHATWG_OPAQUE_PATH] || parsed[WHATWG_PATH]).to_s
       else
         # "canonicalize a pathname": run the fixed text through the basic URL parser
@@ -292,6 +292,16 @@ class URIPattern
   class ConstructorStringParser
     NON_SPECIAL_CHAR_TYPES = %i[char escaped_char invalid_char].freeze
     SEARCH_PREFIX_BLOCKERS = %i[name regexp close asterisk].freeze
+
+    # State sets for apply_implicit_defaults, hoisted to frozen constants so a
+    # state transition does not allocate fresh arrays for each `.include?` check.
+    HOSTNAME_DEFAULT_FROM = %i[protocol authority username password].freeze
+    HOSTNAME_DEFAULT_TO = %i[port pathname search hash].freeze
+    PATHNAME_DEFAULT_FROM = %i[protocol authority username password hostname port].freeze
+    PATHNAME_DEFAULT_TO = %i[search hash].freeze
+    SEARCH_DEFAULT_FROM = %i[protocol authority username password hostname port pathname].freeze
+    # States that do not correspond to a stored component string in change_state.
+    NON_COMPONENT_STATES = %i[init authority done].freeze
 
     # A protocol made of only scheme code points (no pattern metacharacters)
     # compiles to an anchored exact-match regexp, so it is a special scheme iff it
@@ -482,7 +492,7 @@ class URIPattern
     end
 
     def change_state(new_state, skip)
-      unless %i[init authority done].include?(@state)
+      unless NON_COMPONENT_STATES.include?(@state)
         @result[@state] = make_component_string
       end
 
@@ -506,17 +516,17 @@ class URIPattern
     # state straight to a later one fills the skipped slots with their defaults
     # (empty, or "/" for a special-scheme pathname). Driven by @state -> new_state.
     def apply_implicit_defaults(new_state)
-      if %i[protocol authority username password].include?(@state) &&
-         %i[port pathname search hash].include?(new_state) &&
+      if HOSTNAME_DEFAULT_FROM.include?(@state) &&
+         HOSTNAME_DEFAULT_TO.include?(new_state) &&
          !@result.key?(:hostname)
         @result[:hostname] = ""
       end
-      if %i[protocol authority username password hostname port].include?(@state) &&
-         %i[search hash].include?(new_state) &&
+      if PATHNAME_DEFAULT_FROM.include?(@state) &&
+         PATHNAME_DEFAULT_TO.include?(new_state) &&
          !@result.key?(:pathname)
         @result[:pathname] = @protocol_special ? "/" : ""
       end
-      if %i[protocol authority username password hostname port pathname].include?(@state) &&
+      if SEARCH_DEFAULT_FROM.include?(@state) &&
          new_state == :hash &&
          !@result.key?(:search)
         @result[:search] = ""

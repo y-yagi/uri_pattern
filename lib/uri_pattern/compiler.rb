@@ -17,6 +17,12 @@ class URIPattern
     # capture). Shared by the top-level and in-group compile loops.
     LITERAL_TOKEN_TYPES = %i[char escaped_char invalid_char].freeze
 
+    # A literal run immediately followed by one of these part-introducing token
+    # types has its trailing delimiter treated as the part's prefix (see
+    # flush_literals). Hoisted to a frozen constant so build_regexp_string does
+    # not allocate a fresh array on every token.
+    PART_LEADING_TOKEN_TYPES = %i[asterisk name open regexp].freeze
+
     WILDCARD_PREFIX = "_w"
 
     # ECMAScript "v"-flag character classes support a "--" set-subtraction operator
@@ -185,7 +191,7 @@ class URIPattern
           next
         end
 
-        flush_literals(result, before_part: %i[asterisk name open regexp].include?(token.type))
+        flush_literals(result, before_part: PART_LEADING_TOKEN_TYPES.include?(token.type))
 
         case token.type
         when :end
