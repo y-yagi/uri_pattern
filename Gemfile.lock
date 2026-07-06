@@ -45,7 +45,7 @@ GEM
     tsort (0.2.0)
     uri (1.1.1)
     uri-idna (0.3.1)
-    uri-whatwg_parser (0.3.1)
+    uri-whatwg_parser (0.3.2)
       uri (>= 1.0.0)
       uri-idna
     watchcat (0.5.2-x86_64-linux)
@@ -89,7 +89,7 @@ CHECKSUMS
   tsort (0.2.0) sha256=9650a793f6859a43b6641671278f79cfead60ac714148aabe4e3f0060480089f
   uri (1.1.1) sha256=379fa58d27ffb1387eaada68c749d1426738bd0f654d812fcc07e7568f5c57c6
   uri-idna (0.3.1) sha256=c8601a9ca545670a763f5a7c56c99d7072bc2b1f6d83df63e6f35c264b609823
-  uri-whatwg_parser (0.3.1) sha256=caa1bc55cd3f7db0b2a60c474ca8d34d5c7ddc483073b291bfe64a383f17605a
+  uri-whatwg_parser (0.3.2) sha256=a99419f225955e564f856fc87f29cf3d34cbb6b541dcb13f24500b1a9417871d
   uri_pattern (0.1.0)
   watchcat (0.5.2-x86_64-linux) sha256=9cc71b6ffeba73b8865fbf0b1b3d7362d805272d41028f37074e92657b94e66f
 
