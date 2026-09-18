@@ -95,7 +95,7 @@ class URIPattern
   end
 
   def inspect
-    "#{self} protocol=#{protocol} username=#{username} password=#{password} hostname=#{hostname} port=#{port} pathname=#{pathname} query=#{query} fragment=#{fragment}"
+    "#{self}"
   end
 
   private
