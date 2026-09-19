@@ -2,16 +2,9 @@
 
 class URIPattern
   class Compiler
-    SEGMENT_REGEXPS = {
-      pathname: "[^/]+?",
-      hostname: "[^.]+?"
-    }.freeze
+    SEGMENT_REGEXPS = { pathname: "[^/]+?", hostname: "[^.]+?" }.freeze
     DEFAULT_SEGMENT = "[^#?{}]+?"
-
-    DELIMITER_CHARS = {
-      pathname: "/",
-      hostname: "."
-    }.freeze
+    DELIMITER_CHARS = { pathname: "/", hostname: "." }.freeze
 
     # Token types that carry literal text and are buffered (not turned into a
     # capture). Shared by the top-level and in-group compile loops.
@@ -56,10 +49,10 @@ class URIPattern
       # to consume. This keeps the Compiler consistent with PatternString and the
       # spec, which treat the prefix as a separate token.
       if before_part && !delim.empty? && run != delim && run.end_with?(delim)
-        result << Regexp.escape(encode_run(run[0...-delim.length]))
+        result << Regexp.escape(canonicalize_encode(run[0...-delim.length]))
         result << Regexp.escape(delim)
       else
-        result << Regexp.escape(encode_run(run))
+        result << Regexp.escape(canonicalize_encode(run))
       end
     end
 
@@ -85,8 +78,7 @@ class URIPattern
       rescue RegexpError => e
         raise URIPattern::Error, "Invalid pattern: #{e.message}"
       end
-      { regexp: regexp, names: @names_order, wildcard_name_map: @wildcard_name_map,
-        has_regexp_groups: @has_regexp_groups }
+      { regexp:, names: @names_order, wildcard_name_map: @wildcard_name_map, has_regexp_groups: @has_regexp_groups }
     end
 
     private
@@ -196,7 +188,6 @@ class URIPattern
         case token.type
         when :end
           break
-
         when :asterisk
           internal_name = next_wildcard_name
           next_tok = @tokens[i + 1]
@@ -216,7 +207,6 @@ class URIPattern
             result << "(?<#{internal_name}>.*)"
             i += 1
           end
-
         when :name
           name = token.value
           register_name(name)
@@ -241,7 +231,6 @@ class URIPattern
             result << "(?<#{name}>#{seg})"
             i += 1
           end
-
         when :open
           i += 1
           inner_result, i = compile_group_inner(i)
@@ -253,7 +242,6 @@ class URIPattern
           else
             result << "(?:#{inner_result})"
           end
-
         when :regexp
           inner = regexp_inner(token)
           internal_name = next_wildcard_name
@@ -268,9 +256,7 @@ class URIPattern
           end
 
         when :other_modifier
-          # A modifier here did not follow a group/name/regexp/wildcard.
           raise URIPattern::Error, "Dangling modifier #{token.value.inspect} in pattern"
-
         else
           i += 1
         end

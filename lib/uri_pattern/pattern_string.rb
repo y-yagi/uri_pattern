@@ -31,7 +31,7 @@ class URIPattern
     AdaptedToken = Struct.new(:type, :value)
 
     def self.generate(pattern_string, component:, opaque_path: false, ipv6: false)
-      new(pattern_string, component: component, opaque_path: opaque_path, ipv6: ipv6).generate
+      new(pattern_string, component:, opaque_path:, ipv6:).generate
     end
 
     def initialize(pattern_string, component:, opaque_path: false, ipv6: false)
@@ -49,8 +49,6 @@ class URIPattern
 
     private
 
-    # delimiter / prefix characters per component, matching the reference
-    # DEFAULT_OPTIONS / HOSTNAME_OPTIONS / PATHNAME_OPTIONS.
     def options_for(component, opaque_path)
       case component
       when :hostname then [".", ""]
@@ -60,7 +58,7 @@ class URIPattern
     end
 
     def encode_part(value)
-      encode_run(value)
+      canonicalize_encode(value)
     end
 
     # --- parse: token list -> part list ------------------------------------
@@ -308,7 +306,7 @@ class URIPattern
       while i < tokens.length
         t = tokens[i]
         case t.type
-        when :regexp                then out << AdaptedToken.new(:REGEX, t.value); i += 1
+        when :regexp              then out << AdaptedToken.new(:REGEX, t.value); i += 1
         when :char, :invalid_char then out << AdaptedToken.new(:CHAR, t.value); i += 1
         when :escaped_char        then out << AdaptedToken.new(:ESCAPED_CHAR, t.value); i += 1
         when :name                then out << AdaptedToken.new(:NAME, t.value); i += 1

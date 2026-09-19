@@ -6,11 +6,9 @@ class URIPattern
   class MatchResult
     # +inputs+ is the array of arguments passed to #match: [input] or
     # [input, base_url], mirroring URLPatternResult.inputs in the spec.
-    attr_reader :inputs, :protocol, :username, :password, :hostname,
-                :port, :pathname, :query, :fragment
+    attr_reader :inputs, :protocol, :username, :password, :hostname, :port, :pathname, :query, :fragment
 
-    def initialize(inputs:, protocol:, username:, password:, hostname:,
-                   port:, pathname:, query:, fragment:)
+    def initialize(inputs:, protocol:, username:, password:, hostname:, port:, pathname:, query:, fragment:)
       @inputs   = inputs
       @protocol = protocol
       @username = username

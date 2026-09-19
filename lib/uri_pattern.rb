@@ -88,8 +88,6 @@ class URIPattern
     define_method(key) { @patterns[key].pattern }
   end
 
-  # WHATWG "hasRegExpGroups": true when any component's pattern contains a custom
-  # "(...)" regexp group.
   def has_regexp_groups?
     @patterns.values.any?(&:has_regexp_groups?)
   end
@@ -110,7 +108,7 @@ class URIPattern
       # fallback used for dictionary inputs. Merging into a URL string first would
       # corrupt pattern-syntax characters via percent-encoding.
       parts = URIPattern::URLParser.split_pattern(pattern_string)
-      build_patterns(parts, ignore_case: ignore_case, base_url: base_url)
+      build_patterns(parts, ignore_case:, base_url:)
     else
       parts = URIPattern::URLParser.split_pattern(pattern_string)
       # A relative URL pattern (one whose protocol is never determined — e.g.
@@ -155,9 +153,7 @@ class URIPattern
   # String() before it reaches component parsing. For an array that means
   # Array.prototype.join(",") (e.g. ["http","https"] -> "http,https"), which then
   # flows through normal validation and fails just like the browser does for
-  # {protocol: ["http","https"]}. Ruby's Array#to_s would instead produce inspect
-  # output ('["http", "https"]'), so join(",") is used to match JS String(). nil is
-  # left as nil (an absent / undefined dictionary member, not the string "").
+  # {protocol: ["http","https"]}.
   def coerce_init_value(value)
     return nil if value.nil?
     value.is_a?(Array) ? value.join(",") : value.to_s
@@ -179,8 +175,7 @@ class URIPattern
       parts[:protocol] && URIPattern::ComponentPattern.build(parts[:protocol], component: :protocol)
     pathname_opaque = opaque_pathname_context?(parts, protocol_pattern)
 
-    @patterns = compile_components(parts, base_components, base_url:, ignore_case:,
-                                   pathname_opaque:, protocol_pattern:)
+    @patterns = compile_components(parts, base_components, base_url:, ignore_case:, pathname_opaque:, protocol_pattern:)
   end
 
   def validate_port!(port)
@@ -196,7 +191,7 @@ class URIPattern
 
   def resolve_pattern_pathname_part(parts, base_url)
     # Dot-segment collapsing of a pattern pathname is now handled per fixed run by
-    # the component canonicalizer (URLParser.canonicalize_pathname_run), so it works
+    # the component canonicalizer (URLParser.canonicalize_pathname), so it works
     # even when pattern tokens are present. Only base_url-relative resolution remains
     # here.
     if base_url && parts[:pathname]
@@ -246,8 +241,7 @@ class URIPattern
       pattern = parts[key] || default_pattern(key, idx, base_components, base_url, last_specified)
       opaque = (key == :pathname) ? pathname_opaque : false
       component_ignore_case = ignore_case && IGNORE_CASE_COMPONENTS.include?(key)
-      [key, URIPattern::ComponentPattern.build(pattern, component: key,
-                                               ignore_case: component_ignore_case, opaque_path: opaque)]
+      [key, URIPattern::ComponentPattern.build(pattern, component: key, ignore_case: component_ignore_case, opaque_path: opaque)]
     end
   end
 
@@ -329,7 +323,7 @@ class URIPattern
   def valid_base_url?(base_url)
     return false if base_url.nil? || base_url.empty?
     parsed = URI::WHATWG_PARSER.split(base_url)
-    scheme = parsed[URIPattern::URLParser::WHATWG_SCHEME]
+    scheme = parsed[URIPattern::URLParser::SCHEME]
     !scheme.nil? && !scheme.empty?
   rescue
     false
@@ -347,7 +341,6 @@ class URIPattern
 
   def parse_input(input, base_url)
     if input.is_a?(Hash)
-      # base_url with a Hash input is always an error (must propagate, not be silenced)
       raise URIPattern::Error, "base_url must not be provided when input is a Hash" if base_url
       parse_hash_input(input)
     else

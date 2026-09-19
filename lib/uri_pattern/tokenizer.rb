@@ -2,8 +2,6 @@
 
 class URIPattern
   class Tokenizer
-    # Positional (not keyword_init) Struct: tokenizing allocates one Token per
-    # character and keyword construction is markedly slower, so this is a hot path.
     Token = Struct.new(:type, :value, :index)
 
     # A ":name" identifier follows the spec's "regexIdentifierStart" /

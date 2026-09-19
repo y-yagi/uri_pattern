@@ -10,24 +10,24 @@ class URIPattern
     # spec's "dummy URL" canonicalizers in URLParser so the URL parser applies the
     # exact spec encode set and dot-segment handling. Hostname/port keep their
     # dedicated parsers; protocol (and anything else) passes through unchanged.
-    def encode_run(run)
+    def canonicalize_encode(run)
       case @component
       when :protocol
-        URIPattern::URLParser.canonicalize_protocol_run(run)
+        URIPattern::URLParser.canonicalize_protocol(run)
       when :hostname
         @ipv6 ? canonicalize_ipv6(run) : canonicalize_hostname(run)
       when :port
         canonicalize_port(run)
       when :pathname
-        URIPattern::URLParser.canonicalize_pathname_run(run, opaque_path: @opaque_path)
+        URIPattern::URLParser.canonicalize_pathname(run, opaque_path: @opaque_path)
       when :query
-        URIPattern::URLParser.canonicalize_search_run(run)
+        URIPattern::URLParser.canonicalize_search(run)
       when :fragment
-        URIPattern::URLParser.canonicalize_hash_run(run)
+        URIPattern::URLParser.canonicalize_hash(run)
       when :username
-        URIPattern::URLParser.canonicalize_username_run(run)
+        URIPattern::URLParser.canonicalize_username(run)
       when :password
-        URIPattern::URLParser.canonicalize_password_run(run)
+        URIPattern::URLParser.canonicalize_password(run)
       else
         run
       end

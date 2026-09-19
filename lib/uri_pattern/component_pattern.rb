@@ -2,11 +2,6 @@
 
 class URIPattern
   class ComponentPattern
-    # A pure-wildcard ("*") component compiles to the same regexp and pattern
-    # string regardless of component type (an asterisk token uses neither the
-    # segment regexp nor a delimiter), and the resulting object is immutable after
-    # init. So the default wildcard component — by far the most common one, since
-    # every unspecified component defaults to "*" — can be built once and shared.
     @wildcard_cache = {}
 
     # Return a ComponentPattern for +pattern_string+. The pure-wildcard, no-options
@@ -23,8 +18,7 @@ class URIPattern
     def initialize(pattern_string, component:, ignore_case: false, opaque_path: false)
       tokens = Tokenizer.new(pattern_string, policy: :strict).tokenize
       ipv6 = component == :hostname && ipv6_hostname_pattern?(pattern_string)
-      compiled = Compiler.new(tokens, component: component, ignore_case: ignore_case,
-                               opaque_path: opaque_path, ipv6: ipv6).compile
+      compiled = Compiler.new(tokens, component:, ignore_case:, opaque_path:, ipv6:).compile
       @regexp = compiled[:regexp]
       @wildcard_name_map = compiled[:wildcard_name_map]
       @has_regexp_groups = compiled[:has_regexp_groups]
@@ -40,8 +34,7 @@ class URIPattern
     # input. Generated lazily and memoized: generating it for every component at
     # construction time dominated build cost, yet the getters are often never read.
     def pattern
-      @pattern ||= PatternString.generate(@raw_pattern, component: @component,
-                                          opaque_path: @opaque_path, ipv6: @ipv6)
+      @pattern ||= PatternString.generate(@raw_pattern, component: @component, opaque_path: @opaque_path, ipv6: @ipv6)
     end
 
     # WHATWG "hostname pattern is an IPv6 address": true when the pattern starts
@@ -52,10 +45,6 @@ class URIPattern
       str[0] == "[" || (str[0] == "{" && str[1] == "[")
     end
 
-    # A universal-wildcard component ("*") compiles to "(?<name>.*)", which matches
-    # any parsed component value (WHATWG URL parsing removes tab/newline and
-    # percent-encodes other controls, so values never contain "\n"). A boolean
-    # match? can therefore skip running the regexp for such components.
     def universal?
       @raw_pattern == "*"
     end
