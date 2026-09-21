@@ -25,8 +25,6 @@ class URIPattern
     fragment: "*"
   }.freeze
 
-  SPECIAL_SCHEMES = %w[http https ws wss ftp file].freeze
-
   # Authority components inherit the base_url value verbatim (already a literal
   # string); path components inherit it as an *escaped* pattern string.
   ESCAPED_AUTHORITY = %i[protocol hostname port].freeze
@@ -34,10 +32,6 @@ class URIPattern
   # ignoreCase only applies to these three components (per the spec's create
   # algorithm, which only mixes ignoreCaseOptions into pathname/search/hash).
   IGNORE_CASE_COMPONENTS = %i[pathname query fragment].freeze
-
-  # WHATWG "escape a pattern string": backslash-escape every code point that has
-  # special meaning in pattern syntax so the string matches literally.
-  PATTERN_ESCAPE_CHARS = "+*?:{}()\\"
 
   def initialize(input = {}, base_url = nil, ignore_case: false)
     if input.is_a?(Hash)
@@ -71,17 +65,7 @@ class URIPattern
       results[key] = URIPattern::ComponentResult.new(input: value, groups: groups)
     end
 
-    URIPattern::MatchResult.new(
-      inputs: base_url.nil? ? [input] : [input, base_url],
-      protocol:  results[:protocol],
-      username:  results[:username],
-      password:  results[:password],
-      hostname:  results[:hostname],
-      port:      results[:port],
-      pathname:  results[:pathname],
-      query:     results[:query],
-      fragment:  results[:fragment]
-    )
+    URIPattern::MatchResult.new(inputs: base_url.nil? ? [input] : [input, base_url], **results)
   end
 
   COMPONENT_KEYS.each do |key|
@@ -93,32 +77,30 @@ class URIPattern
   end
 
   def inspect
-    "#{self}"
+    to_s
   end
 
   private
 
   def init_from_string(pattern_string, base_url, ignore_case:)
-    if base_url
-      unless valid_base_url?(base_url)
-        raise URIPattern::Error, "Invalid base_url: #{base_url.inspect}"
-      end
-      # Parse the pattern on its own (preserving pattern syntax like "{...}"), then
-      # let unspecified components fall back to the base_url — the same hierarchical
-      # fallback used for dictionary inputs. Merging into a URL string first would
-      # corrupt pattern-syntax characters via percent-encoding.
-      parts = URIPattern::URLParser.split_pattern(pattern_string)
-      build_patterns(parts, ignore_case:, base_url:)
-    else
-      parts = URIPattern::URLParser.split_pattern(pattern_string)
-      # A relative URL pattern (one whose protocol is never determined — e.g.
-      # "/foo", "example.com/foo", or "{https://}example.com" where the scheme is
-      # hidden inside a group) is invalid without a base URL.
-      if parts[:protocol].nil?
-        raise URIPattern::Error, "Relative URL pattern requires a base URL"
-      end
-      build_patterns(parts, ignore_case: ignore_case)
+    validate_base_url!(base_url) if base_url
+    # Parse the pattern on its own (preserving pattern syntax like "{...}"), then
+    # let unspecified components fall back to the base_url — the same hierarchical
+    # fallback used for dictionary inputs. Merging into a URL string first would
+    # corrupt pattern-syntax characters via percent-encoding.
+    parts = URIPattern::URLParser.split_pattern(pattern_string)
+    # A relative URL pattern (one whose protocol is never determined — e.g.
+    # "/foo", "example.com/foo", or "{https://}example.com" where the scheme is
+    # hidden inside a group) is invalid without a base URL.
+    if base_url.nil? && parts[:protocol].nil?
+      raise URIPattern::Error, "Relative URL pattern requires a base URL"
     end
+    build_patterns(parts, ignore_case:, base_url:)
+  end
+
+  def validate_base_url!(base_url)
+    return if valid_base_url?(base_url)
+    raise URIPattern::Error, "Invalid base_url: #{base_url.inspect}"
   end
 
   def init_from_hash(hash, base_url, ignore_case:)
@@ -128,9 +110,7 @@ class URIPattern
     end
     hash = hash.transform_keys(&:to_sym)
     effective_base = coerce_init_value(hash[:base_url])
-    if effective_base && !valid_base_url?(effective_base)
-      raise URIPattern::Error, "Invalid base_url: #{effective_base.inspect}"
-    end
+    validate_base_url!(effective_base) if effective_base
     parts = {}
     COMPONENT_KEYS.each { |k| parts[k] = coerce_init_value(hash[k]) }
     # "process protocol for init": a protocol value provided via a dictionary may
@@ -220,12 +200,8 @@ class URIPattern
   # components are present, and the protocol pattern can't match any special scheme.
   def opaque_pathname_context?(parts, protocol_pattern)
     return false unless parts[:protocol]
-    return false unless authority_empty?(parts)
-    SPECIAL_SCHEMES.none? { |s| protocol_pattern.match(s) }
-  end
-
-  def authority_empty?(parts)
-    %i[hostname username password port].all? { |k| parts[k].nil? || parts[k].empty? }
+    return false unless URIPattern::URLParser.authority_empty?(parts)
+    !URIPattern::URLParser.special_scheme_pattern?(protocol_pattern)
   end
 
   def compile_components(parts, base_components, base_url:, ignore_case:, pathname_opaque:, protocol_pattern:)
@@ -257,7 +233,7 @@ class URIPattern
     elsif base_components[key] && ESCAPED_AUTHORITY.include?(key)
       base_components[key]
     elsif base_url && ESCAPED_PATH.include?(key)
-      escape_pattern_string(base_components[key] || "")
+      URIPattern::PatternString.escape_pattern_string(base_components[key] || "")
     else
       COMPONENT_DEFAULTS[key]
     end
@@ -327,10 +303,6 @@ class URIPattern
     !scheme.nil? && !scheme.empty?
   rescue
     false
-  end
-
-  def escape_pattern_string(str)
-    str.each_char.map { |c| PATTERN_ESCAPE_CHARS.include?(c) ? "\\#{c}" : c }.join
   end
 
   def parse_base_url(base_url)

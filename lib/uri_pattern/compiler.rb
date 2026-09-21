@@ -32,30 +32,6 @@ class URIPattern
 
     include URIPattern::Canonicalization
 
-    # Accumulate consecutive literal characters; flush_literals canonicalizes the
-    # whole run through the component's encode callback (which may raise) and
-    # appends the Regexp-escaped result. This mirrors the spec applying an
-    # encoding callback to each fixed-text part of a pattern.
-    def flush_literals(result, before_part: false)
-      return if @literal_buf.empty?
-      run = @literal_buf
-      @literal_buf = +""
-      delim = delimiter_char
-      # When this run is immediately followed by a part (name/group/wildcard), a
-      # trailing delimiter ("/" for pathname, "." for hostname) is that part's
-      # prefix, not part of this fixed run. Canonicalize the run WITHOUT it — so e.g.
-      # pathname dot-segments collapse correctly (`/a/../` → run `/a/..` → `/`) — and
-      # re-append the delimiter verbatim for pull_delimiter_prefix / the next literal
-      # to consume. This keeps the Compiler consistent with PatternString and the
-      # spec, which treat the prefix as a separate token.
-      if before_part && !delim.empty? && run != delim && run.end_with?(delim)
-        result << Regexp.escape(canonicalize_encode(run[0...-delim.length]))
-        result << Regexp.escape(delim)
-      else
-        result << Regexp.escape(canonicalize_encode(run))
-      end
-    end
-
     def initialize(tokens, component:, ignore_case: false, opaque_path: false, ipv6: false)
       @tokens = tokens
       @component = component
@@ -82,6 +58,30 @@ class URIPattern
     end
 
     private
+
+    # Accumulate consecutive literal characters; flush_literals canonicalizes the
+    # whole run through the component's encode callback (which may raise) and
+    # appends the Regexp-escaped result. This mirrors the spec applying an
+    # encoding callback to each fixed-text part of a pattern.
+    def flush_literals(result, before_part: false)
+      return if @literal_buf.empty?
+      run = @literal_buf
+      @literal_buf = +""
+      delim = delimiter_char
+      # When this run is immediately followed by a part (name/group/wildcard), a
+      # trailing delimiter ("/" for pathname, "." for hostname) is that part's
+      # prefix, not part of this fixed run. Canonicalize the run WITHOUT it — so e.g.
+      # pathname dot-segments collapse correctly (`/a/../` → run `/a/..` → `/`) — and
+      # re-append the delimiter verbatim for pull_delimiter_prefix / the next literal
+      # to consume. This keeps the Compiler consistent with PatternString and the
+      # spec, which treat the prefix as a separate token.
+      if before_part && !delim.empty? && run != delim && run.end_with?(delim)
+        result << Regexp.escape(canonicalize_encode(run[0...-delim.length]))
+        result << Regexp.escape(delim)
+      else
+        result << Regexp.escape(canonicalize_encode(run))
+      end
+    end
 
     def translate_v_class_sets(source)
       source.gsub(V_CLASS_SUBTRACTION) do
@@ -134,24 +134,16 @@ class URIPattern
     end
 
     def modifier_regex(name, core, prefix, mod)
+      delim = delimiter_char.empty? ? "" : Regexp.escape(delimiter_char)
+      repeatable = !delim.empty? && !prefix.empty?
       case mod
       when "+"
         # One or more: capture all repetitions in a single group
         # prefix + (core)(delimiter+core)* → all in one named group
-        delim = delimiter_char.empty? ? "" : Regexp.escape(delimiter_char)
-        if delim.empty? || prefix.empty?
-          "#{prefix}(?<#{name}>(?:#{core})+)"
-        else
-          "#{prefix}(?<#{name}>#{core}(?:#{delim}#{core})*)"
-        end
+        "#{prefix}(?<#{name}>#{repeatable ? "#{core}(?:#{delim}#{core})*" : "(?:#{core})+"})"
       when "*"
         # Zero or more: optional group, nil on zero occurrences
-        delim = delimiter_char.empty? ? "" : Regexp.escape(delimiter_char)
-        if delim.empty? || prefix.empty?
-          "(?:#{prefix}(?<#{name}>(?:#{core})*))?".dup
-        else
-          "(?:#{prefix}(?<#{name}>#{core}(?:#{delim}#{core})*))?".dup
-        end
+        "(?:#{prefix}(?<#{name}>#{repeatable ? "#{core}(?:#{delim}#{core})*" : "(?:#{core})*"}))?"
       when "?"
         # Zero or one
         "(?:#{prefix}(?<#{name}>#{core}))?"
@@ -162,14 +154,14 @@ class URIPattern
 
     def build_regexp_string
       result = +""
-      i = 0
+      @index = 0
 
-      while i < @tokens.length
-        token = @tokens[i]
+      while @index < @tokens.length
+        token = current_token
 
         if LITERAL_TOKEN_TYPES.include?(token.type)
           @literal_buf << token.value
-          i += 1
+          @index += 1
           next
         end
 
@@ -177,9 +169,9 @@ class URIPattern
         # modifier is a fixed-text part, not a group. Merge its text into the
         # literal run so adjacent literals canonicalize together (e.g. hostname
         # "example{.com/}foo" → the run "example.com/foo" → host-truncated at "/").
-        if token.type == :open && (fixed = fixed_text_group(i))
+        if token.type == :open && (fixed = fixed_text_group(@index))
           @literal_buf << fixed[:text]
-          i = fixed[:next_index]
+          @index = fixed[:next_index]
           next
         end
 
@@ -189,81 +181,107 @@ class URIPattern
         when :end
           break
         when :asterisk
-          internal_name = next_wildcard_name
-          next_tok = @tokens[i + 1]
-          if next_tok && next_tok.type == :other_modifier
-            prefix = pull_delimiter_prefix(result)
-            # Wildcards match greedily; optional/one-or-more modifiers use lazy outer quantifier
-            case next_tok.value
-            when "+"
-              result << "#{prefix}(?<#{internal_name}>.*)"
-            when "*", "?"
-              result << "(?:#{prefix}(?<#{internal_name}>.*))?\?"
-            else
-              result << "#{prefix}(?<#{internal_name}>.*)#{next_tok.value}"
-            end
-            i += 2
-          else
-            result << "(?<#{internal_name}>.*)"
-            i += 1
-          end
+          compile_asterisk(result)
         when :name
-          name = token.value
-          register_name(name)
-          next_tok = @tokens[i + 1]
-          seg = segment_regexp
-          if next_tok&.type == :other_modifier
-            prefix = pull_delimiter_prefix(result)
-            result << modifier_regex(name, seg, prefix, next_tok.value)
-            i += 2
-          elsif next_tok&.type == :regexp
-            inner = regexp_inner(next_tok)
-            mod_tok = @tokens[i + 2]
-            if mod_tok&.type == :other_modifier
-              prefix = pull_delimiter_prefix(result)
-              result << modifier_regex(name, inner, prefix, mod_tok.value)
-              i += 3
-            else
-              result << "(?<#{name}>(?:#{inner}))"
-              i += 2
-            end
-          else
-            result << "(?<#{name}>#{seg})"
-            i += 1
-          end
+          compile_name(result)
         when :open
-          i += 1
-          inner_result, i = compile_group_inner(i)
-          mod_tok = @tokens[i]
-          if mod_tok&.type == :other_modifier
-            prefix = pull_delimiter_prefix(result)
-            result << "(?:#{prefix}#{inner_result})#{mod_tok.value}"
-            i += 1
-          else
-            result << "(?:#{inner_result})"
-          end
+          compile_group(result)
         when :regexp
-          inner = regexp_inner(token)
-          internal_name = next_wildcard_name
-          mod_tok = @tokens[i + 1]
-          if mod_tok&.type == :other_modifier
-            prefix = pull_delimiter_prefix(result)
-            result << modifier_regex(internal_name, inner, prefix, mod_tok.value)
-            i += 2
-          else
-            result << "(?<#{internal_name}>(?:#{inner}))"
-            i += 1
-          end
-
+          compile_inline_regexp(result)
         when :other_modifier
           raise URIPattern::Error, "Dangling modifier #{token.value.inspect} in pattern"
         else
-          i += 1
+          @index += 1
         end
       end
 
       flush_literals(result)
       result
+    end
+
+    def current_token
+      @tokens[@index]
+    end
+
+    # Top-level "*" wildcard, with delimiter-prefix pulling and modifier support
+    # (unlike a wildcard nested in a "{...}" group, see compile_group_inner).
+    def compile_asterisk(result)
+      internal_name = next_wildcard_name
+      next_tok = @tokens[@index + 1]
+      if next_tok && next_tok.type == :other_modifier
+        prefix = pull_delimiter_prefix(result)
+        # Wildcards match greedily; optional/one-or-more modifiers use lazy outer quantifier
+        case next_tok.value
+        when "+"
+          result << "#{prefix}(?<#{internal_name}>.*)"
+        when "*", "?"
+          result << "(?:#{prefix}(?<#{internal_name}>.*))?\?"
+        else
+          result << "#{prefix}(?<#{internal_name}>.*)#{next_tok.value}"
+        end
+        @index += 2
+      else
+        result << "(?<#{internal_name}>.*)"
+        @index += 1
+      end
+    end
+
+    # Top-level ":name" part, with delimiter-prefix pulling and modifier support.
+    def compile_name(result)
+      name = current_token.value
+      register_name(name)
+      next_tok = @tokens[@index + 1]
+      seg = segment_regexp
+      if next_tok&.type == :other_modifier
+        prefix = pull_delimiter_prefix(result)
+        result << modifier_regex(name, seg, prefix, next_tok.value)
+        @index += 2
+      elsif next_tok&.type == :regexp
+        inner = regexp_inner(next_tok)
+        mod_tok = @tokens[@index + 2]
+        if mod_tok&.type == :other_modifier
+          prefix = pull_delimiter_prefix(result)
+          result << modifier_regex(name, inner, prefix, mod_tok.value)
+          @index += 3
+        else
+          result << "(?<#{name}>(?:#{inner}))"
+          @index += 2
+        end
+      else
+        result << "(?<#{name}>#{seg})"
+        @index += 1
+      end
+    end
+
+    # Top-level "{...}" group: compile its contents (compile_group_inner), then
+    # apply a trailing modifier with delimiter-prefix pulling, if present.
+    def compile_group(result)
+      @index += 1
+      inner_result, @index = compile_group_inner(@index)
+      mod_tok = @tokens[@index]
+      if mod_tok&.type == :other_modifier
+        prefix = pull_delimiter_prefix(result)
+        result << "(?:#{prefix}#{inner_result})#{mod_tok.value}"
+        @index += 1
+      else
+        result << "(?:#{inner_result})"
+      end
+    end
+
+    # Top-level "(...)" custom regexp part, with delimiter-prefix pulling and
+    # modifier support.
+    def compile_inline_regexp(result)
+      inner = regexp_inner(current_token)
+      internal_name = next_wildcard_name
+      mod_tok = @tokens[@index + 1]
+      if mod_tok&.type == :other_modifier
+        prefix = pull_delimiter_prefix(result)
+        result << modifier_regex(internal_name, inner, prefix, mod_tok.value)
+        @index += 2
+      else
+        result << "(?<#{internal_name}>(?:#{inner}))"
+        @index += 1
+      end
     end
 
     # If the "{" group starting at index i contains only literal characters and is

@@ -20,6 +20,22 @@ class URIPattern
     DEFAULT_PORTS = URI::WhatwgParser::SPECIAL_SCHEME.reject{ |_, v| v.nil? }.freeze
     SPECIAL_SCHEMES_SET = Set.new(URI::WhatwgParser::SPECIAL_SCHEME.keys).freeze
 
+    # Whether a compiled component pattern can match at least one special scheme
+    # name. Shared by URIPattern#opaque_pathname_context? and
+    # ConstructorStringParser#compute_protocol_matches_special_scheme.
+    def special_scheme_pattern?(component_pattern)
+      SPECIAL_SCHEMES_SET.any? { |scheme| component_pattern.match(scheme) }
+    end
+
+    AUTHORITY_KEYS = %i[hostname username password port].freeze
+
+    # Whether none of the authority components (hostname/username/password/port)
+    # are set. Shared by URIPattern#opaque_pathname_context? (pattern parts) and
+    # normalize_hash_input (match-input hash) below.
+    def authority_empty?(components)
+      AUTHORITY_KEYS.all? { |k| components[k].to_s.empty? }
+    end
+
     # --- "dummy URL" canonicalization of a fixed pattern run --------------------
     #
     # The WHATWG URLPattern spec canonicalizes each fixed-text part of a pattern by
@@ -129,39 +145,41 @@ class URIPattern
     def normalize_hash_input(hash)
       protocol = hash[:protocol].to_s.downcase
       # Opaque path: non-special scheme, no username/password/hostname/port set
-      opaque_path = !protocol.empty? && !SPECIAL_SCHEMES_SET.include?(protocol) &&
-                    hash[:hostname]&.to_s.empty? &&
-                    hash[:username]&.to_s.empty? &&
-                    hash[:password]&.to_s.empty? &&
-                    hash[:port]&.to_s.empty?
+      opaque_path = !protocol.empty? && !SPECIAL_SCHEMES_SET.include?(protocol) && authority_empty?(hash)
       result = {}
       hash.each do |k, v|
-        result[k] = case k
-        when :protocol
-          norm = canonicalize_protocol_input(v.to_s)
-          return nil if norm.nil?
-          norm
-        when :port
-          norm = normalize_port_input(v.to_s, protocol)
-          return nil if norm.nil?
-          norm
-        when :pathname
-          canonicalize_pathname(v.to_s, opaque_path:)
-        when :hostname
-          normalize_hostname_input(v.to_s)
-        when :username
-          canonicalize_username(v.to_s)
-        when :password
-          canonicalize_password(v.to_s)
-        when :query
-          canonicalize_search(v.to_s)
-        when :fragment
-          canonicalize_hash(v.to_s)
-        else
-          v.to_s
-        end
+        value = normalize_input_component(k, v.to_s, protocol:, opaque_path:)
+        return nil if value.nil?
+        result[k] = value
       end
       result
+    end
+
+    # Normalize a single match-input hash component. Only :protocol and :port
+    # can fail (returning nil, which normalize_hash_input propagates as a whole
+    # nil result); every other component either canonicalizes successfully or
+    # raises URIPattern::Error.
+    def normalize_input_component(key, value, protocol:, opaque_path:)
+      case key
+      when :protocol
+        canonicalize_protocol_input(value)
+      when :port
+        normalize_port_input(value, protocol)
+      when :pathname
+        canonicalize_pathname(value, opaque_path:)
+      when :hostname
+        normalize_hostname_input(value)
+      when :username
+        canonicalize_username(value)
+      when :password
+        canonicalize_password(value)
+      when :query
+        canonicalize_search(value)
+      when :fragment
+        canonicalize_hash(value)
+      else
+        value
+      end
     end
 
     # "canonicalize a protocol" on a match input: a scheme is ASCII, starts with a
@@ -195,41 +213,32 @@ class URIPattern
     # uri-whatwg_parser setters run the basic URL parser with the matching state
     # override and apply the spec encode sets (special-query for search, userinfo
     # for username/password, etc.).
-    def canonicalize_search(run)
-      return run if run.match?(SEARCH_NO_ENCODE_RE)
+    #
+    # All four share the same shape (no-encode fast-path check -> dup dummy_url ->
+    # set -> read back -> rescue into URIPattern::Error); only the no-encode regexp,
+    # setter/getter pair and the name used in the error message differ, so that
+    # shape is factored into canonicalize_via_dummy_url below.
+    DUMMY_CANONICALIZERS = {
+      search:   [SEARCH_NO_ENCODE_RE,   :query=,    :query],
+      hash:     [HASH_NO_ENCODE_RE,     :fragment=, :fragment],
+      username: [USERINFO_NO_ENCODE_RE, :user=,     :user],
+      password: [USERINFO_NO_ENCODE_RE, :password=, :password]
+    }.freeze
+
+    def canonicalize_via_dummy_url(kind, run)
+      no_encode, writer, reader = DUMMY_CANONICALIZERS.fetch(kind)
+      return run if run.match?(no_encode)
       u = dummy_url
-      u.query = run
-      u.query.to_s
+      u.public_send(writer, run)
+      u.public_send(reader).to_s
     rescue => e
-      raise URIPattern::Error, "Invalid search #{run.inspect}: #{e.message}"
+      raise URIPattern::Error, "Invalid #{kind} #{run.inspect}: #{e.message}"
     end
 
-    def canonicalize_hash(run)
-      return run if run.match?(HASH_NO_ENCODE_RE)
-      u = dummy_url
-      u.fragment = run
-      u.fragment.to_s
-    rescue => e
-      raise URIPattern::Error, "Invalid hash #{run.inspect}: #{e.message}"
-    end
-
-    def canonicalize_username(run)
-      return run if run.match?(USERINFO_NO_ENCODE_RE)
-      u = dummy_url
-      u.user = run
-      u.user.to_s
-    rescue => e
-      raise URIPattern::Error, "Invalid username #{run.inspect}: #{e.message}"
-    end
-
-    def canonicalize_password(run)
-      return run if run.match?(USERINFO_NO_ENCODE_RE)
-      u = dummy_url
-      u.password = run
-      u.password.to_s
-    rescue => e
-      raise URIPattern::Error, "Invalid password #{run.inspect}: #{e.message}"
-    end
+    def canonicalize_search(run)   = canonicalize_via_dummy_url(:search, run)
+    def canonicalize_hash(run)     = canonicalize_via_dummy_url(:hash, run)
+    def canonicalize_username(run) = canonicalize_via_dummy_url(:username, run)
+    def canonicalize_password(run) = canonicalize_via_dummy_url(:password, run)
 
     # "canonicalize a pathname" / "canonicalize an opaque pathname": run the fixed
     # text through a dummy URL with the spec's per-component state override rather
@@ -310,44 +319,17 @@ class URIPattern
         @token_increment = 1
 
         if current.type == :end
-          case @state
-          when :init
-            rewind
-            if hash_prefix?
-              change_state(:hash, 1)
-            elsif search_prefix?
-              change_state(:search, 1)
-            else
-              change_state(:pathname, 0)
-            end
-            @token_index += @token_increment
-            next
-          when :authority
-            rewind_and_set_state(:hostname)
-            @token_index += @token_increment
-            next
-          else
-            change_state(:done, 0)
-            break
-          end
-        end
-
-        if group_open?
+          break unless step_end_state
+        elsif group_open?
           @group_depth += 1
-          @token_index += @token_increment
-          next
-        end
-
-        if @group_depth.positive?
+        elsif @group_depth.positive?
           if group_close?
             @group_depth -= 1
-          else
-            @token_index += @token_increment
-            next
+            step_state
           end
+        else
+          step_state
         end
-
-        step_state
 
         @token_index += @token_increment
       end
@@ -357,6 +339,33 @@ class URIPattern
     end
 
     private
+
+    # Handle the trailing :end token. :init and :authority still have a
+    # component to close out (rewinding to re-derive it from what follows),
+    # so they return true and let the main loop's token_index bump apply, same
+    # as any other state transition; any other state is truly done parsing, so
+    # this finalizes the last component and returns false to stop the loop
+    # (skipping the token_index bump, matching the original "break").
+    def step_end_state
+      case @state
+      when :init
+        rewind
+        if hash_prefix?
+          change_state(:hash, 1)
+        elsif search_prefix?
+          change_state(:search, 1)
+        else
+          change_state(:pathname, 0)
+        end
+        true
+      when :authority
+        rewind_and_set_state(:hostname)
+        true
+      else
+        change_state(:done, 0)
+        false
+      end
+    end
 
     def step_state
       case @state
@@ -540,7 +549,7 @@ class URIPattern
         return
       end
       compiled = URIPattern::ComponentPattern.new(protocol_string, component: :protocol)
-      @protocol_special = URLParser::SPECIAL_SCHEMES_SET.any? { |scheme| compiled.match(scheme) }
+      @protocol_special = URLParser.special_scheme_pattern?(compiled)
     rescue URIPattern::Error
       @protocol_special = false
     end
