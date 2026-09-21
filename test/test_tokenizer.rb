@@ -22,8 +22,8 @@ class TestTokenizer < Test::Unit::TestCase
 
   def test_plain_chars
     tokens = tokenize("abc")
-    assert_equal [:char, :char, :char, :end], types(tokens)
-    assert_equal %w[a b c], values(tokens.first(3))
+    assert_equal [:char, :end], types(tokens)
+    assert_equal "abc", tokens[0].value
   end
 
   def test_asterisk
@@ -52,8 +52,10 @@ class TestTokenizer < Test::Unit::TestCase
 
   def test_name_token_with_suffix
     tokens = tokenize(":id/rest")
-    assert_equal [:name, :char, :char, :char, :char, :char, :end], types(tokens)
+    assert_equal [:name, :char, :char, :end], types(tokens)
     assert_equal "id", tokens[0].value
+    assert_equal "/", tokens[1].value
+    assert_equal "rest", tokens[2].value
   end
 
   def test_colon_without_identifier
@@ -61,8 +63,9 @@ class TestTokenizer < Test::Unit::TestCase
     # tokenizing emits an :invalid_char (so the ":" is still seen by the
     # constructor string parser), strict tokenizing raises.
     tokens = tokenize("a:1b")
-    assert_equal [:char, :invalid_char, :char, :char, :end], types(tokens)
+    assert_equal [:char, :invalid_char, :char, :end], types(tokens)
     assert_equal ":", tokens[1].value
+    assert_equal "1b", tokens[2].value
     assert_raise(URIPattern::Error) { tokenize("a:1b", policy: :strict) }
   end
 
@@ -176,8 +179,31 @@ class TestTokenizer < Test::Unit::TestCase
 
   def test_complex_pattern
     tokens = tokenize("/users/:id/posts")
-    # /users/ (7 chars) + :id (name) + /posts (6 chars) + end
-    expected_types = [:char, :char, :char, :char, :char, :char, :char, :name, :char, :char, :char, :char, :char, :char, :end]
+    # "/" "users" "/" :id "/" "posts" end
+    expected_types = [:char, :char, :char, :name, :char, :char, :end]
     assert_equal expected_types, types(tokens)
+    assert_equal ["/", "users", "/", "id", "/", "posts", ""], values(tokens)
+  end
+
+  def test_delimiters_break_runs
+    tokens = tokenize("a.b/c@d#e[f]")
+    assert_equal %i[char char char char char char char char char char char char end], types(tokens)
+    assert_equal %w[a . b / c @ d # e [ f ]], values(tokens.first(12))
+  end
+
+  def test_non_ascii_run_index_is_character_based
+    tokens = tokenize("café/:id")
+    assert_equal %i[char char name end], types(tokens)
+    assert_equal "café", tokens[0].value
+    assert_equal "/", tokens[1].value
+    assert_equal 4, tokens[1].index
+    assert_equal "id", tokens[2].value
+    assert_equal 5, tokens[2].index
+  end
+
+  def test_char_values_reconstruct_the_pattern
+    pattern = "/users/foo.bar?x=1"
+    tokens = tokenize(pattern)
+    assert_equal pattern, tokens.map(&:value).join
   end
 end
