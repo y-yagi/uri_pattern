@@ -60,6 +60,10 @@ class URIPattern
     HASH_NO_ENCODE_RE     = /\A[\x21-\x7e&&[^"#<>`]]*\z/
     USERINFO_NO_ENCODE_RE = /\A[\x21-\x7e&&[^"#\/:;<=>?@\[\\\]^`{|}]]*\z/
 
+    # scheme state (https://url.spec.whatwg.org/#scheme-state) just lowercases a run
+    # of this shape, so such a run needs no dummy-URL parse.
+    PROTOCOL_NO_ENCODE_RE = /\A[a-zA-Z][a-zA-Z0-9+.\-]*\z/
+
     # A non-opaque pathname run made only of these code points (note: no ".", so no
     # dot-segments; no "?"/"#", so no termination; none in the path percent-encode
     # set) needs no encoding. Skipping the parse for such runs — the common case,
@@ -188,6 +192,7 @@ class URIPattern
     # the run as the scheme of a dummy URL and reads back the lowercased scheme.
     def canonicalize_protocol(run)
       return run if run.empty?
+      return run.downcase if run.match?(PROTOCOL_NO_ENCODE_RE)
       parsed = URI::WHATWG_PARSER.split("#{run}://dummy.invalid/")
       parsed[SCHEME].to_s
     rescue => e
