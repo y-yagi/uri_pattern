@@ -25,8 +25,6 @@ class URIPattern
     fragment: "*"
   }.freeze
 
-  # Authority components inherit the base_url value verbatim (already a literal
-  # string); path components inherit it as an *escaped* pattern string.
   ESCAPED_AUTHORITY = %i[protocol hostname port].freeze
   ESCAPED_PATH = %i[pathname query fragment].freeze
   # ignoreCase only applies to these three components (per the spec's create
@@ -84,14 +82,10 @@ class URIPattern
 
   def init_from_string(pattern_string, base_url, ignore_case:)
     validate_base_url!(base_url) if base_url
-    # Parse the pattern on its own (preserving pattern syntax like "{...}"), then
-    # let unspecified components fall back to the base_url — the same hierarchical
-    # fallback used for dictionary inputs. Merging into a URL string first would
-    # corrupt pattern-syntax characters via percent-encoding.
+    # Parse the pattern on its own (preserving pattern syntax like "{...}") and let
+    # unspecified components fall back to the base_url; merging into a URL string
+    # first would corrupt pattern-syntax characters via percent-encoding.
     parts = URIPattern::URLParser.split_pattern(pattern_string)
-    # A relative URL pattern (one whose protocol is never determined — e.g.
-    # "/foo", "example.com/foo", or "{https://}example.com" where the scheme is
-    # hidden inside a group) is invalid without a base URL.
     if base_url.nil? && parts[:protocol].nil?
       raise URIPattern::Error, "Relative URL pattern requires a base URL"
     end
@@ -104,7 +98,6 @@ class URIPattern
   end
 
   def init_from_hash(hash, base_url, ignore_case:)
-    # A dictionary input must not be paired with a base_url argument.
     if base_url
       raise URIPattern::Error, "base_url cannot be provided when input is a dictionary"
     end
@@ -113,9 +106,8 @@ class URIPattern
     validate_base_url!(effective_base) if effective_base
     parts = {}
     COMPONENT_KEYS.each { |k| parts[k] = coerce_init_value(hash[k]) }
-    # "process protocol for init": a protocol value provided via a dictionary may
-    # carry a single trailing ":" (e.g. "http{s}?:"), which is stripped before
-    # compiling the component.
+    # "process protocol for init": a dictionary protocol may carry a single trailing
+    # ":" (e.g. "http{s}?:"), which is stripped before compiling the component.
     if parts[:protocol]&.end_with?(":")
       parts[:protocol] = parts[:protocol][0...-1]
     end
@@ -129,11 +121,10 @@ class URIPattern
     build_patterns(parts, ignore_case: ignore_case, base_url: effective_base)
   end
 
-  # A URLPatternInit member is a USVString, so JS coerces a non-string value with
-  # String() before it reaches component parsing. For an array that means
-  # Array.prototype.join(",") (e.g. ["http","https"] -> "http,https"), which then
-  # flows through normal validation and fails just like the browser does for
-  # {protocol: ["http","https"]}.
+  # A URLPatternInit member is a USVString, so a non-string value is coerced with
+  # String() before it reaches component parsing; for an array that means
+  # join(",") (e.g. ["http","https"] -> "http,https"), which then fails validation
+  # just like the browser does.
   def coerce_init_value(value)
     return nil if value.nil?
     value.is_a?(Array) ? value.join(",") : value.to_s
@@ -145,12 +136,9 @@ class URIPattern
     validate_port!(parts[:port])
     parts = normalize_pattern_parts(parts, base_url)
 
-    # Compile the protocol component once up front and reuse it both for the
-    # opaque-path determination and as the :protocol entry. When parts[:protocol]
-    # is set, compile_components would build exactly this pattern anyway (protocol
-    # is never ignore_case and never opaque), so this only removes the redundant
-    # tokenize/compile/Regexp build the opaque check used to throw away (matters
-    # for opaque patterns like "data:...").
+    # Compile the protocol component once and reuse it for both the opaque-path
+    # determination and the :protocol entry; protocol is never ignore_case and never
+    # opaque, so compile_components would build exactly this pattern anyway.
     protocol_pattern =
       parts[:protocol] && URIPattern::ComponentPattern.build(parts[:protocol], component: :protocol)
     pathname_opaque = opaque_pathname_context?(parts, protocol_pattern)
@@ -170,10 +158,8 @@ class URIPattern
   end
 
   def resolve_pattern_pathname_part(parts, base_url)
-    # Dot-segment collapsing of a pattern pathname is now handled per fixed run by
-    # the component canonicalizer (URLParser.canonicalize_pathname), so it works
-    # even when pattern tokens are present. Only base_url-relative resolution remains
-    # here.
+    # Dot-segment collapsing of a pattern pathname is handled per fixed run by the
+    # component canonicalizer, so only base_url-relative resolution remains here.
     if base_url && parts[:pathname]
       return parts if absolute_pattern_pathname?(parts[:pathname])
       parts = parts.dup
@@ -183,10 +169,8 @@ class URIPattern
   end
 
   # Suppress the default port only when the protocol pattern is *exactly* a special
-  # scheme name and the port is that scheme's default port. The comparison is an
-  # exact, case-sensitive string match (per the spec's create step /
-  # defaultPortForProtocol): a pattern like "http{s}?" or "HTTPS" is not the
-  # concrete scheme "https", so it must not trigger suppression.
+  # scheme name and the port is that scheme's default. The comparison is exact and
+  # case-sensitive: "http{s}?" or "HTTPS" is not the concrete scheme "https".
   def suppress_default_port(parts)
     return parts unless parts[:port] && parts[:protocol]
     default = URIPattern::URLParser::DEFAULT_PORTS[parts[:protocol]]
@@ -196,8 +180,6 @@ class URIPattern
     parts
   end
 
-  # An opaque path context occurs when the protocol is explicitly set, no authority
-  # components are present, and the protocol pattern can't match any special scheme.
   def opaque_pathname_context?(parts, protocol_pattern)
     return false unless parts[:protocol]
     return false unless URIPattern::URLParser.authority_empty?(parts)
@@ -207,11 +189,9 @@ class URIPattern
   def compile_components(parts, base_components, base_url:, ignore_case:, pathname_opaque:, protocol_pattern:)
     # Hierarchical base_url fallback: components appearing *after* the last
     # explicitly-specified component (in COMPONENT_KEYS order) do not inherit from
-    # the base — they are wildcarded. Only components at or before that boundary
-    # fall back to the base URL value.
+    # the base — they are wildcarded.
     last_specified = COMPONENT_KEYS.each_index.select { |idx| !parts[COMPONENT_KEYS[idx]].nil? }.max
     COMPONENT_KEYS.each_with_index.to_h do |key, idx|
-      # Reuse the protocol component already compiled in build_patterns.
       next [key, protocol_pattern] if key == :protocol && protocol_pattern
 
       pattern = parts[key] || default_pattern(key, idx, base_components, base_url, last_specified)
@@ -221,12 +201,11 @@ class URIPattern
     end
   end
 
-  # The pattern for a component that was not explicitly specified. Components
-  # inherited from a base_url are exact strings: authority components are taken
-  # verbatim, while path components are escaped ("escape a pattern string") so a
-  # base query like "q=*&v=?" is not reinterpreted as pattern syntax.
-  # username/password are never inherited from a base_url (spec "process a
-  # URLPatternInit" guards them with "is not a pattern"); they stay wildcards.
+  # The pattern for a component that was not explicitly specified. Authority
+  # components inherited from a base_url are taken verbatim; path components are
+  # escaped ("escape a pattern string") so a base query like "q=*&v=?" is not
+  # reinterpreted as pattern syntax. username/password are never inherited (spec
+  # "process a URLPatternInit" guards them with "is not a pattern").
   def default_pattern(key, idx, base_components, base_url, last_specified)
     if base_url && last_specified && idx > last_specified
       COMPONENT_DEFAULTS[key]
@@ -239,10 +218,6 @@ class URIPattern
     end
   end
 
-  # Resolve a relative pattern pathname against the base_url's path. This is pure
-  # string manipulation — prepend the base path up to and including its last "/" —
-  # so pattern-syntax characters ("{", "}", ":", …) are preserved rather than
-  # percent-encoded by the URL parser.
   # WHATWG "is an absolute pathname" for a pattern: a leading "/", or (because this
   # is a pattern, not a URL) an escaped "\\/" or a "{/" grouping that yields a
   # leading slash. Such pathnames are NOT resolved against the base_url's path.
@@ -253,6 +228,8 @@ class URIPattern
     (pathname[0] == "\\" || pathname[0] == "{") && pathname[1] == "/"
   end
 
+  # Pure string manipulation — prepend the base path up to and including its last
+  # "/" — so pattern-syntax characters are preserved rather than percent-encoded.
   def resolve_pattern_pathname(pathname, base_url)
     base_path = parse_base_url(base_url)[:pathname].to_s
     base_path = "/" if base_path.empty?
@@ -294,8 +271,6 @@ class URIPattern
     output
   end
 
-  # A base_url must be a parseable absolute URL (it needs a scheme). An empty
-  # string or a relative reference is not valid.
   def valid_base_url?(base_url)
     return false if base_url.nil? || base_url.empty?
     parsed = URI::WHATWG_PARSER.split(base_url)
@@ -333,9 +308,9 @@ class URIPattern
     nil
   end
 
-  # Build the eight raw component strings for a dictionary match input. With no
-  # base_url each component defaults to "". With a base_url, unspecified components
-  # are inherited from it and a relative pathname is resolved against its path.
+  # Build the eight raw component strings for a dictionary match input. With a
+  # base_url, unspecified components are inherited from it and a relative pathname
+  # is resolved against its path.
   def hash_input_components(normalized, effective_base)
     unless effective_base
       return COMPONENT_KEYS.to_h { |k| [k, normalized[k]&.to_s || ""] }
@@ -353,9 +328,7 @@ class URIPattern
 
   # Resolve a relative pathname against the base_url using WHATWG relative-URL
   # resolution (replace the base's last path segment, honour dot segments), the
-  # same algorithm node's URLPattern uses for a dictionary match input. A previous
-  # hand-rolled concatenation appended to the full base path and broke on a
-  # base_url carrying a query/fragment.
+  # same algorithm node's URLPattern uses for a dictionary match input.
   def resolve_relative_pathname(pathname, base_url)
     return pathname if pathname.empty?
     URIPattern::URLParser.split_components(pathname, base_url: base_url)[:pathname]

@@ -3,11 +3,10 @@
 class URIPattern
   ComponentResult = Data.define(:input, :groups)
 
-  # +inputs+ is the array of arguments passed to #match: [input] or
-  # [input, base_url], mirroring URLPatternResult.inputs in the spec.
+  # +inputs+ mirrors URLPatternResult.inputs: [input] or [input, base_url].
   #
-  # Order matches URIPattern::COMPONENT_KEYS (kept in sync by hand: require order
-  # means COMPONENT_KEYS is not yet defined when this file loads).
+  # Member order matches URIPattern::COMPONENT_KEYS (kept in sync by hand: require
+  # order means COMPONENT_KEYS is not yet defined when this file loads).
   MatchResult = Data.define(:inputs, :protocol, :username, :password,
                             :hostname, :port, :pathname, :query, :fragment)
 end

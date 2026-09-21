@@ -6,28 +6,26 @@ class URIPattern
     DEFAULT_SEGMENT = "[^#?{}]+?"
     DELIMITER_CHARS = { pathname: "/", hostname: "." }.freeze
 
-    # Token types that carry literal text and are buffered (not turned into a
-    # capture). Shared by the top-level and in-group compile loops.
+    # Token types that carry literal text and are buffered rather than turned into
+    # a capture.
     LITERAL_TOKEN_TYPES = %i[char escaped_char invalid_char].freeze
 
     # A literal run immediately followed by one of these part-introducing token
     # types has its trailing delimiter treated as the part's prefix (see
-    # flush_literals). Hoisted to a frozen constant so build_regexp_string does
-    # not allocate a fresh array on every token.
+    # flush_literals).
     PART_LEADING_TOKEN_TYPES = %i[asterisk name open regexp].freeze
 
     WILDCARD_PREFIX = "_w"
 
     # ECMAScript "v"-flag character classes support a "--" set-subtraction operator
-    # (e.g. "[[a-z]--a]" = "[a-z]" minus "a") that Ruby's regexp engine lacks. Ruby
-    # does support "&&" intersection, so rewrite "[A--B]" as "[A&&[^B]]".
+    # that Ruby's regexp engine lacks. Ruby does support "&&" intersection, so
+    # rewrite "[A--B]" as "[A&&[^B]]".
     V_CLASS_SUBTRACTION = /(\[[^\[\]]+\])--(\[[^\[\]]+\]|[^\]]+?)(?=\])/
 
     # The spec compiles each custom regexp group as a Unicode-mode ECMAScript
     # regexp, where an identity escape ("\\x" for a literal x) is only valid for a
     # SyntaxCharacter, "/", or a recognized escape class. Letters like "m" or "H"
-    # have no such escape and make the whole pattern invalid, even though Ruby
-    # would silently accept them.
+    # make the whole pattern invalid, even though Ruby would silently accept them.
     VALID_REGEXP_ESCAPE = /\A[\^$\\.*+?()\[\]{}|\/dDsSwWbBfnrtvcxukpP0-9]\z/
 
     include URIPattern::Canonicalization
@@ -61,20 +59,17 @@ class URIPattern
 
     # Accumulate consecutive literal characters; flush_literals canonicalizes the
     # whole run through the component's encode callback (which may raise) and
-    # appends the Regexp-escaped result. This mirrors the spec applying an
-    # encoding callback to each fixed-text part of a pattern.
+    # appends the Regexp-escaped result.
     def flush_literals(result, before_part: false)
       return if @literal_buf.empty?
       run = @literal_buf
       @literal_buf = +""
       delim = delimiter_char
-      # When this run is immediately followed by a part (name/group/wildcard), a
-      # trailing delimiter ("/" for pathname, "." for hostname) is that part's
-      # prefix, not part of this fixed run. Canonicalize the run WITHOUT it — so e.g.
-      # pathname dot-segments collapse correctly (`/a/../` → run `/a/..` → `/`) — and
-      # re-append the delimiter verbatim for pull_delimiter_prefix / the next literal
-      # to consume. This keeps the Compiler consistent with PatternString and the
-      # spec, which treat the prefix as a separate token.
+      # When this run is immediately followed by a part, a trailing delimiter ("/" for
+      # pathname, "." for hostname) is that part's prefix, not part of this fixed run.
+      # Canonicalize the run WITHOUT it — so e.g. pathname dot-segments collapse
+      # correctly (`/a/../` → run `/a/..` → `/`) — and re-append the delimiter
+      # verbatim for pull_delimiter_prefix / the next literal to consume.
       if before_part && !delim.empty? && run != delim && run.end_with?(delim)
         result << Regexp.escape(canonicalize_encode(run[0...-delim.length]))
         result << Regexp.escape(delim)
@@ -97,8 +92,7 @@ class URIPattern
 
     def delimiter_char
       # Opaque paths (non-special schemes like "data:") are not hierarchical, so
-      # there is no "/" segment delimiter and no delimiter prefix is pulled into
-      # an optional/repeated group.
+      # there is no "/" segment delimiter and no prefix to pull into a group.
       return "" if @component == :pathname && @opaque_path
       DELIMITER_CHARS[@component] || ""
     end
@@ -138,14 +132,12 @@ class URIPattern
       repeatable = !delim.empty? && !prefix.empty?
       case mod
       when "+"
-        # One or more: capture all repetitions in a single group
-        # prefix + (core)(delimiter+core)* → all in one named group
+        # One or more: all repetitions captured in a single named group.
         "#{prefix}(?<#{name}>#{repeatable ? "#{core}(?:#{delim}#{core})*" : "(?:#{core})+"})"
       when "*"
         # Zero or more: optional group, nil on zero occurrences
         "(?:#{prefix}(?<#{name}>#{repeatable ? "#{core}(?:#{delim}#{core})*" : "(?:#{core})*"}))?"
       when "?"
-        # Zero or one
         "(?:#{prefix}(?<#{name}>#{core}))?"
       else
         "(?:#{prefix}(?<#{name}>#{core}))#{mod}"
@@ -166,8 +158,8 @@ class URIPattern
         end
 
         # A "{...}" group whose body is pure literal text and which carries no
-        # modifier is a fixed-text part, not a group. Merge its text into the
-        # literal run so adjacent literals canonicalize together (e.g. hostname
+        # modifier is a fixed-text part, not a group. Merge its text into the literal
+        # run so adjacent literals canonicalize together (e.g. hostname
         # "example{.com/}foo" → the run "example.com/foo" → host-truncated at "/").
         if token.type == :open && (fixed = fixed_text_group(@index))
           @literal_buf << fixed[:text]
@@ -203,8 +195,8 @@ class URIPattern
       @tokens[@index]
     end
 
-    # Top-level "*" wildcard, with delimiter-prefix pulling and modifier support
-    # (unlike a wildcard nested in a "{...}" group, see compile_group_inner).
+    # Top-level "*" wildcard: unlike one nested in a "{...}" group (see
+    # compile_group_inner) it pulls a delimiter prefix and supports a modifier.
     def compile_asterisk(result)
       internal_name = next_wildcard_name
       next_tok = @tokens[@index + 1]
@@ -226,7 +218,6 @@ class URIPattern
       end
     end
 
-    # Top-level ":name" part, with delimiter-prefix pulling and modifier support.
     def compile_name(result)
       name = current_token.value
       register_name(name)
@@ -253,8 +244,6 @@ class URIPattern
       end
     end
 
-    # Top-level "{...}" group: compile its contents (compile_group_inner), then
-    # apply a trailing modifier with delimiter-prefix pulling, if present.
     def compile_group(result)
       @index += 1
       inner_result, @index = compile_group_inner(@index)
@@ -268,8 +257,6 @@ class URIPattern
       end
     end
 
-    # Top-level "(...)" custom regexp part, with delimiter-prefix pulling and
-    # modifier support.
     def compile_inline_regexp(result)
       inner = regexp_inner(current_token)
       internal_name = next_wildcard_name
@@ -286,7 +273,6 @@ class URIPattern
 
     # If the "{" group starting at index i contains only literal characters and is
     # not followed by a modifier, return its text and the index just past "}".
-    # Otherwise return nil (it is a real group with a capture/wildcard/modifier).
     def fixed_text_group(i)
       j = i + 1
       text = +""
@@ -364,26 +350,23 @@ class URIPattern
 
     # Prepare a :regexp token's raw inner source for embedding: validate its identity
     # escapes (ECMAScript "u"-mode rules) and neutralize any author-written named
-    # captures so only URLPattern-level names surface. The tokenizer already enforced
-    # the structural rules (balance, no capturing sub-groups, ASCII, non-empty).
+    # captures so only URLPattern-level names surface. The tokenizer already
+    # enforced the structural rules (balance, no capturing sub-groups, ASCII).
     def regexp_inner(token)
-      # Every "(...)" custom-regexp group flows through here. Each such group is a
-      # spec "regexp" part, so the presence of any one makes the component (and thus
-      # the whole pattern) carry regexp groups.
+      # Every "(...)" custom-regexp group is a spec "regexp" part, so the presence of
+      # any one makes the whole pattern carry regexp groups.
       @has_regexp_groups = true
       inner = token.value.to_s
       validate_regexp_escapes(inner)
       strip_named_captures(inner)
     end
 
-    # Validate every "\X" identity escape in a regexp group's source.
     def validate_regexp_escapes(inner)
       inner.scan(/\\(.)/m) { validate_regexp_escape($1) }
     end
 
-    # Named captures written inside a custom regexp group — "(?<x>...)" / "(?'x'...)"
-    # — must not surface in the match result's groups (only URLPattern-level names
-    # and wildcard indices do). Convert them to plain non-capturing groups, while
+    # Named captures written inside a custom regexp group must not surface in the
+    # match result's groups, so convert them to plain non-capturing groups while
     # leaving lookbehind assertions "(?<=...)" / "(?<!...)" untouched.
     def strip_named_captures(inner)
       inner.gsub(/\(\?<(?![=!])[^>]*>/, "(?:").gsub(/\(\?'[^']*'/, "(?:")

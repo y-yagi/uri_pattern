@@ -6,10 +6,8 @@ class URIPattern
   # Including classes must define @component, @opaque_path and @ipv6.
   module Canonicalization
     # Canonicalize one fixed-text run for the current component. The percent-encode
-    # components (pathname/query/fragment/username/password) are delegated to the
-    # spec's "dummy URL" canonicalizers in URLParser so the URL parser applies the
-    # exact spec encode set and dot-segment handling. Hostname/port keep their
-    # dedicated parsers; protocol (and anything else) passes through unchanged.
+    # components are delegated to the spec's "dummy URL" canonicalizers in URLParser;
+    # hostname/port keep their dedicated parsers, anything else passes through.
     def canonicalize_encode(run)
       case @component
       when :protocol
@@ -34,9 +32,7 @@ class URIPattern
     end
 
     # WHATWG basic URL parser "port state": read leading ASCII digits, stop at the
-    # first non-digit, fail if the number exceeds 65535, and serialize without
-    # leading zeros. (Default-port stripping is protocol-dependent and not applied
-    # to the pattern string.)
+    # first non-digit, fail above 65535, and serialize without leading zeros.
     def canonicalize_port(run)
       return run if run.empty?
       digits = run[/\A[0-9]*/]
@@ -47,8 +43,7 @@ class URIPattern
     end
 
     # WHATWG "canonicalize a hostname": strip tab/newline/CR, end the host at the
-    # first path delimiter ("/", "\\", "#", "?"), then run the host parser. A host
-    # that fails to parse (forbidden code points, bad IDN, etc.) raises.
+    # first path delimiter, then run the host parser (which may raise).
     def canonicalize_hostname(run)
       return run if run.empty?
       value = run.gsub(/[\t\n\r]/, "")

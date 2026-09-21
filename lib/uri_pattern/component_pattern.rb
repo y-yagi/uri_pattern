@@ -4,8 +4,8 @@ class URIPattern
   class ComponentPattern
     @wildcard_cache = {}
 
-    # Return a ComponentPattern for +pattern_string+. The pure-wildcard, no-options
-    # case is served from a per-component cache to skip tokenize/compile/Regexp work.
+    # The pure-wildcard, no-options case is served from a per-component cache to
+    # skip tokenize/compile/Regexp work.
     def self.build(pattern_string, component:, ignore_case: false, opaque_path: false)
       if pattern_string == "*" && !ignore_case && !opaque_path
         @wildcard_cache[component] ||= new(pattern_string, component: component)
@@ -22,8 +22,6 @@ class URIPattern
       @regexp = compiled[:regexp]
       @wildcard_name_map = compiled[:wildcard_name_map]
       @has_regexp_groups = compiled[:has_regexp_groups]
-      # Arguments retained so the "component pattern string" can be generated lazily
-      # on first #pattern access (see below).
       @raw_pattern = pattern_string
       @component = component
       @opaque_path = opaque_path
@@ -31,15 +29,15 @@ class URIPattern
     end
 
     # The canonicalized "component pattern string" (see PatternString), not the raw
-    # input. Generated lazily and memoized: generating it for every component at
-    # construction time dominated build cost, yet the getters are often never read.
+    # input. Memoized because generating it for every component dominated build
+    # cost, yet the getters are often never read.
     def pattern
       @pattern ||= PatternString.generate(@raw_pattern, component: @component, opaque_path: @opaque_path, ipv6: @ipv6)
     end
 
     # WHATWG "hostname pattern is an IPv6 address": true when the pattern starts
-    # with "[" (optionally wrapped in a "{" group). Such hostnames use the IPv6
-    # encode callback (lowercase hex + char validation) instead of host parsing.
+    # WHATWG "hostname pattern is an IPv6 address": the pattern starts with "["
+    # (optionally wrapped in a "{" group), which selects the IPv6 encode callback.
     def ipv6_hostname_pattern?(str)
       return false if str.length < 2
       str[0] == "[" || (str[0] == "{" && str[1] == "[")
@@ -49,8 +47,6 @@ class URIPattern
       @raw_pattern == "*"
     end
 
-    # True when this component's pattern contains at least one custom "(...)" regexp
-    # group (a spec "regexp" part).
     def has_regexp_groups?
       @has_regexp_groups
     end

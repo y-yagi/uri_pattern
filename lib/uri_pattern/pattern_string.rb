@@ -4,9 +4,9 @@ class URIPattern
   # Generates the WHATWG "component pattern string" returned by the component
   # getters (protocol, hostname, pathname, ...). It parses the raw component
   # pattern into a part list — applying the same per-component canonicalization
-  # used for matching — and re-serialises it ("generate a pattern string"), so
-  # wildcards become "*", hostnames are punycoded, fixed text is percent-encoded,
-  # redundant "{}" groups are dropped, and so on.
+  # used for matching — and re-serialises it, so wildcards become "*", hostnames
+  # are punycoded, fixed text is percent-encoded, redundant "{}" groups are
+  # dropped, and so on.
   #
   # This is a port of the path-to-regexp-derived parse()/partsToPattern() used by
   # the reference URLPattern implementation.
@@ -17,7 +17,7 @@ class URIPattern
 
     # Identifier continuation code points. The reference uses
     # /[$_‌‍\p{ID_Continue}]/u; in Ruby "_", ZWNJ and ZWJ are already in
-    # \p{ID_Continue}, so only "$" needs to be added (avoids a duplicate-range warning).
+    # \p{ID_Continue}, so only "$" needs to be added.
     IDENTIFIER_PART = /[$\p{ID_Continue}]/u
 
     MODIFIER_MAP = { "?" => :optional, "*" => :zero_or_more, "+" => :one_or_more }.freeze
@@ -35,9 +35,7 @@ class URIPattern
     end
 
     # WHATWG "escape a pattern string": backslash-escape every code point that has
-    # special meaning in pattern syntax so the string matches literally. Exposed as
-    # a module function so URIPattern#default_pattern can reuse it for a base_url
-    # path component inherited into a pattern.
+    # special meaning in pattern syntax so the string matches literally.
     def self.escape_pattern_string(value)
       value.gsub(/([+*?:{}()\\])/, '\\\\\1')
     end
@@ -127,9 +125,8 @@ class URIPattern
       value
     end
 
-    # A NAME (":id") or a REGEX/ASTERISK ("(...)"/"*") part-introducing token: try
-    # NAME, then REGEX, then (only if neither matched) ASTERISK. Shared by the
-    # top-level loop and the OPEN-group branch of #parse.
+    # A NAME (":id") or a REGEX/ASTERISK part-introducing token: try NAME, then
+    # REGEX, then (only if neither matched) ASTERISK.
     def try_consume_name_or_pattern
       name = try_consume(:NAME)
       pattern = try_consume(:REGEX)
@@ -244,8 +241,8 @@ class URIPattern
 
     # Whether a non-fixed part must be wrapped in "{...}" to serialize
     # unambiguously: an explicit suffix, a prefix that is not exactly the
-    # component's own delimiter, or (checked below) an adjacency with a
-    # neighboring part that would otherwise be misparsed on re-tokenization.
+    # component's own delimiter, or an adjacency with a neighboring part that
+    # would otherwise be misparsed on re-tokenization.
     def needs_grouping?(part, last_part, next_part)
       custom_name = part.custom_name?
 
@@ -325,9 +322,8 @@ class URIPattern
 
     # --- token adaptation --------------------------------------------------
 
-    # Convert our Tokenizer output into the flat token stream the parser expects.
-    # A "(...)" group is already a single :regexp token (carrying the raw regexp
-    # source), so it maps straight to a :REGEX token.
+    # Convert our Tokenizer output into the flat token stream the parser expects. A
+    # "(...)" group is already a single :regexp token, so it maps straight to :REGEX.
     def adapt_tokens(tokens)
       out = []
       i = 0
