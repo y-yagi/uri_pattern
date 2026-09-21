@@ -2,26 +2,18 @@
 
 class URIPattern
   class Tokenizer
-    # Positional (not keyword_init) Struct: tokenizing allocates one Token per
-    # character and keyword construction is markedly slower, so this is a hot path.
     Token = Struct.new(:type, :value, :index)
 
     # A ":name" identifier follows the spec's "regexIdentifierStart" /
-    # "regexIdentifierPart" (path-to-regex-modified):
+    # "regexIdentifierPart":
     #   start = /[$_\p{ID_Start}]/u,  part = /[$_‌‍\p{ID_Continue}]/u
     # In Ruby "_", ZWNJ and ZWJ are already in \p{ID_Continue} (and "$" is not),
-    # while "_" is not in \p{ID_Start}; so the start class adds "$" and "_" and the
-    # part class adds only "$". Matching the spec here (rather than a permissive
-    # "[\u{80}-\u{10FFFF}]") makes e.g. ":$foo" a name and rejects a name starting
-    # with a non-ID_Start code point (e.g. ":🚲"), as the reference does.
-    # Anchored with "\G" (not "\A") so it can be matched positionally against the
-    # whole pattern at the char after ":" without slicing off a fresh tail string;
-    # "\G" matches at the search-start position passed to Regexp#match.
+    # while "_" is not in \p{ID_Start}. Anchored with "\G" so it can be matched
+    # positionally at the char after ":" without slicing off a fresh tail string.
     IDENTIFIER_RE = /\G[$_\p{ID_Start}][$\p{ID_Continue}]*/u
 
-    # Token types after which a "*" is a modifier (repeat) rather than a
-    # standalone wildcard. Frozen constant so the "*" branch does not allocate a
-    # fresh array per "*" character.
+    # Token types after which a "*" is a modifier (repeat) rather than a standalone
+    # wildcard.
     MODIFIABLE_PREV_TYPES = %i[close regexp name asterisk].freeze
 
     def initialize(pattern, policy: :lenient)
@@ -51,11 +43,10 @@ class URIPattern
           @index += 1
         when "("
           # Lex the whole "(...)" group atomically into one :regexp token, as the
-          # spec's tokenizer does (validating it during the scan).
+          # spec's tokenizer does.
           scan_regexp_group
         when ")"
-          # A ")" not consumed by a group scan is a literal character (the spec's
-          # tokenizer falls through to a CHAR token here).
+          # A ")" not consumed by a group scan is a literal character.
           emit(:char, ch)
           @index += 1
         when "*"
@@ -67,9 +58,8 @@ class URIPattern
           end
           @index += 1
         when "?", "+"
-          # "?"/"+" are always modifier tokens. A modifier that does not follow a
-          # group/name/regexp/wildcard is a dangling modifier; the compiler rejects
-          # it. (A literal "?"/"+" must be escaped, e.g. "\\?".)
+          # "?"/"+" are always modifier tokens; the compiler rejects a dangling one.
+          # (A literal "?"/"+" must be escaped, e.g. "\\?".)
           emit(:other_modifier, ch)
           @index += 1
         when ":"
@@ -77,13 +67,9 @@ class URIPattern
             emit(:name, m[0])
             @index += 1 + m[0].length
           else
-            # ":" must be followed by a valid name. When it is not, the spec's
-            # tokenizer reports "missing parameter name": strict tokenizing (used
-            # when compiling a component) raises, while lenient tokenizing
-            # (constructor string parsing) emits an :invalid_char so the ":" is
-            # still recognized as a protocol/password/port delimiter by the
-            # constructor string parser (which treats :invalid_char as a
-            # non-special char, like :char).
+            # The spec's tokenizer reports "missing parameter name" here. Lenient
+            # tokenizing emits an :invalid_char so the ":" is still recognized as a
+            # protocol/password/port delimiter by the constructor string parser.
             handle_invalid("missing parameter name")
           end
         else
@@ -110,16 +96,14 @@ class URIPattern
       end
     end
 
-    # Scan a "(...)" regexp group starting at @index (the "("), following the
-    # spec/path-to-regexp tokenizer. On success emits a single :regexp token whose
-    # value is the raw inner regexp source and advances @index past the closing ")".
-    # On a spec violation calls handle_invalid_group (strict raises; lenient emits an
-    # :invalid_char for the "(" and re-scans the remainder).
+    # Scan a "(...)" regexp group starting at @index (the "("), following the spec
+    # tokenizer. On success emits a single :regexp token whose value is the raw inner
+    # regexp source; on a violation handle_invalid_group raises (strict) or emits an
+    # :invalid_char for the "(" and re-scans the remainder (lenient).
     def scan_regexp_group
       start = @index
       j = start + 1
 
-      # "Pattern cannot start with '?'": a top-level group may not open with "?".
       return handle_invalid_group(start, "regexp group cannot start with '?'") if @pattern[j] == "?"
 
       count = 1
@@ -130,7 +114,6 @@ class URIPattern
         return handle_invalid_group(start, "invalid character #{c.inspect} in regexp group") if c.ord >= 0x80
 
         if c == "\\"
-          # Escaped pair: keep the backslash and the next char verbatim.
           return handle_invalid_group(start, "trailing backslash in regexp group") if j + 1 >= @pattern.length
           inner << c << @pattern[j + 1]
           j += 2
@@ -148,8 +131,8 @@ class URIPattern
           next
         elsif c == "("
           count += 1
-          # A nested group must be non-capturing ("(?:...)" etc.); a bare "(" would
-          # introduce a capturing group, which is not allowed.
+          # A nested group must be non-capturing ("(?:...)"); a bare "(" would
+          # introduce a capturing group.
           return handle_invalid_group(start, "capturing groups are not allowed") if @pattern[j + 1] != "?"
           inner << c
           j += 1

@@ -4,9 +4,9 @@ class URIPattern
   # Generates the WHATWG "component pattern string" returned by the component
   # getters (protocol, hostname, pathname, ...). It parses the raw component
   # pattern into a part list — applying the same per-component canonicalization
-  # used for matching — and re-serialises it ("generate a pattern string"), so
-  # wildcards become "*", hostnames are punycoded, fixed text is percent-encoded,
-  # redundant "{}" groups are dropped, and so on.
+  # used for matching — and re-serialises it, so wildcards become "*", hostnames
+  # are punycoded, fixed text is percent-encoded, redundant "{}" groups are
+  # dropped, and so on.
   #
   # This is a port of the path-to-regexp-derived parse()/partsToPattern() used by
   # the reference URLPattern implementation.
@@ -17,7 +17,7 @@ class URIPattern
 
     # Identifier continuation code points. The reference uses
     # /[$_‌‍\p{ID_Continue}]/u; in Ruby "_", ZWNJ and ZWJ are already in
-    # \p{ID_Continue}, so only "$" needs to be added (avoids a duplicate-range warning).
+    # \p{ID_Continue}, so only "$" needs to be added.
     IDENTIFIER_PART = /[$\p{ID_Continue}]/u
 
     MODIFIER_MAP = { "?" => :optional, "*" => :zero_or_more, "+" => :one_or_more }.freeze
@@ -31,7 +31,13 @@ class URIPattern
     AdaptedToken = Struct.new(:type, :value)
 
     def self.generate(pattern_string, component:, opaque_path: false, ipv6: false)
-      new(pattern_string, component: component, opaque_path: opaque_path, ipv6: ipv6).generate
+      new(pattern_string, component:, opaque_path:, ipv6:).generate
+    end
+
+    # WHATWG "escape a pattern string": backslash-escape every code point that has
+    # special meaning in pattern syntax so the string matches literally.
+    def self.escape_pattern_string(value)
+      value.gsub(/([+*?:{}()\\])/, '\\\\\1')
     end
 
     def initialize(pattern_string, component:, opaque_path: false, ipv6: false)
@@ -49,8 +55,6 @@ class URIPattern
 
     private
 
-    # delimiter / prefix characters per component, matching the reference
-    # DEFAULT_OPTIONS / HOSTNAME_OPTIONS / PATHNAME_OPTIONS.
     def options_for(component, opaque_path)
       case component
       when :hostname then [".", ""]
@@ -60,7 +64,7 @@ class URIPattern
     end
 
     def encode_part(value)
-      encode_run(value)
+      canonicalize_encode(value)
     end
 
     # --- parse: token list -> part list ------------------------------------
@@ -76,11 +80,7 @@ class URIPattern
 
       while @index < @tokens.length
         char_token = try_consume(:CHAR)
-        name_token = try_consume(:NAME)
-        regexp_or_wildcard = try_consume(:REGEX)
-        if !name_token && !regexp_or_wildcard
-          regexp_or_wildcard = try_consume(:ASTERISK)
-        end
+        name_token, regexp_or_wildcard = try_consume_name_or_pattern
 
         if name_token || regexp_or_wildcard
           prefix = char_token || ""
@@ -103,11 +103,7 @@ class URIPattern
         open_token = try_consume(:OPEN)
         if open_token
           prefix = consume_text
-          name_token = try_consume(:NAME)
-          regexp_or_wildcard = try_consume(:REGEX)
-          if !name_token && !regexp_or_wildcard
-            regexp_or_wildcard = try_consume(:ASTERISK)
-          end
+          name_token, regexp_or_wildcard = try_consume_name_or_pattern
           suffix = consume_text
           must_consume(:CLOSE)
           modifier_token = try_consume_modifier
@@ -127,6 +123,15 @@ class URIPattern
       value = @tokens[@index].value
       @index += 1
       value
+    end
+
+    # A NAME (":id") or a REGEX/ASTERISK part-introducing token: try NAME, then
+    # REGEX, then (only if neither matched) ASTERISK.
+    def try_consume_name_or_pattern
+      name = try_consume(:NAME)
+      pattern = try_consume(:REGEX)
+      pattern ||= try_consume(:ASTERISK) unless name
+      [name, pattern]
     end
 
     def try_consume_modifier
@@ -214,70 +219,88 @@ class URIPattern
       result = +""
       parts.each_with_index do |part, i|
         if part.type == :fixed
-          if part.modifier == :none
-            result << escape_pattern_string(part.value)
-          else
-            result << "{#{escape_pattern_string(part.value)}}#{modifier_to_string(part.modifier)}"
-          end
+          append_fixed_part(result, part)
           next
         end
 
-        custom_name = part.custom_name?
-
-        needs_grouping =
-          !part.suffix.empty? ||
-          (!part.prefix.empty? && (part.prefix.length != 1 || !@prefixes.include?(part.prefix)))
-
         last_part = i > 0 ? parts[i - 1] : nil
         next_part = i < parts.length - 1 ? parts[i + 1] : nil
-
-        if !needs_grouping && custom_name &&
-           part.type == :segment_wildcard && part.modifier == :none &&
-           next_part && next_part.prefix.empty? && next_part.suffix.empty?
-          if next_part.type == :fixed
-            code = next_part.value.empty? ? "" : next_part.value[0]
-            needs_grouping = IDENTIFIER_PART.match?(code)
-          else
-            needs_grouping = !next_part.custom_name?
-          end
-        end
-
-        if !needs_grouping && part.prefix.empty? && last_part && last_part.type == :fixed
-          code = last_part.value[-1]
-          needs_grouping = !code.nil? && @prefixes.include?(code)
-        end
-
-        result << "{" if needs_grouping
-        result << escape_pattern_string(part.prefix)
-        result << ":#{part.name}" if custom_name
-
-        case part.type
-        when :regexp
-          result << "(#{part.value})"
-        when :segment_wildcard
-          result << "(#{@segment_wildcard_regexp})" unless custom_name
-        when :full_wildcard
-          if !custom_name && (last_part.nil? ||
-             last_part.type == :fixed ||
-             last_part.modifier != :none ||
-             needs_grouping ||
-             !part.prefix.empty?)
-            result << "*"
-          else
-            result << "(#{FULL_WILDCARD_REGEXP})"
-          end
-        end
-
-        if part.type == :segment_wildcard && custom_name && !part.suffix.empty? &&
-           IDENTIFIER_PART.match?(part.suffix[0])
-          result << "\\"
-        end
-
-        result << escape_pattern_string(part.suffix)
-        result << "}" if needs_grouping
-        result << modifier_to_string(part.modifier) if part.modifier != :none
+        grouping = needs_grouping?(part, last_part, next_part)
+        append_part(result, part, last_part, grouping)
       end
       result
+    end
+
+    def append_fixed_part(result, part)
+      if part.modifier == :none
+        result << escape_pattern_string(part.value)
+      else
+        result << "{#{escape_pattern_string(part.value)}}#{modifier_to_string(part.modifier)}"
+      end
+    end
+
+    # Whether a non-fixed part must be wrapped in "{...}" to serialize
+    # unambiguously: an explicit suffix, a prefix that is not exactly the
+    # component's own delimiter, or an adjacency with a neighboring part that
+    # would otherwise be misparsed on re-tokenization.
+    def needs_grouping?(part, last_part, next_part)
+      custom_name = part.custom_name?
+
+      needs_grouping =
+        !part.suffix.empty? ||
+        (!part.prefix.empty? && (part.prefix.length != 1 || !@prefixes.include?(part.prefix)))
+
+      if !needs_grouping && custom_name &&
+         part.type == :segment_wildcard && part.modifier == :none &&
+         next_part && next_part.prefix.empty? && next_part.suffix.empty?
+        if next_part.type == :fixed
+          code = next_part.value.empty? ? "" : next_part.value[0]
+          needs_grouping = IDENTIFIER_PART.match?(code)
+        else
+          needs_grouping = !next_part.custom_name?
+        end
+      end
+
+      if !needs_grouping && part.prefix.empty? && last_part && last_part.type == :fixed
+        code = last_part.value[-1]
+        needs_grouping = !code.nil? && @prefixes.include?(code)
+      end
+
+      needs_grouping
+    end
+
+    def append_part(result, part, last_part, needs_grouping)
+      custom_name = part.custom_name?
+
+      result << "{" if needs_grouping
+      result << escape_pattern_string(part.prefix)
+      result << ":#{part.name}" if custom_name
+
+      case part.type
+      when :regexp
+        result << "(#{part.value})"
+      when :segment_wildcard
+        result << "(#{@segment_wildcard_regexp})" unless custom_name
+      when :full_wildcard
+        if !custom_name && (last_part.nil? ||
+           last_part.type == :fixed ||
+           last_part.modifier != :none ||
+           needs_grouping ||
+           !part.prefix.empty?)
+          result << "*"
+        else
+          result << "(#{FULL_WILDCARD_REGEXP})"
+        end
+      end
+
+      if part.type == :segment_wildcard && custom_name && !part.suffix.empty? &&
+         IDENTIFIER_PART.match?(part.suffix[0])
+        result << "\\"
+      end
+
+      result << escape_pattern_string(part.suffix)
+      result << "}" if needs_grouping
+      result << modifier_to_string(part.modifier) if part.modifier != :none
     end
 
     def modifier_to_string(modifier)
@@ -290,7 +313,7 @@ class URIPattern
     end
 
     def escape_pattern_string(value)
-      value.gsub(/([+*?:{}()\\])/, '\\\\\1')
+      self.class.escape_pattern_string(value)
     end
 
     def escape_regexp_string(value)
@@ -299,16 +322,15 @@ class URIPattern
 
     # --- token adaptation --------------------------------------------------
 
-    # Convert our Tokenizer output into the flat token stream the parser expects.
-    # A "(...)" group is already a single :regexp token (carrying the raw regexp
-    # source), so it maps straight to a :REGEX token.
+    # Convert our Tokenizer output into the flat token stream the parser expects. A
+    # "(...)" group is already a single :regexp token, so it maps straight to :REGEX.
     def adapt_tokens(tokens)
       out = []
       i = 0
       while i < tokens.length
         t = tokens[i]
         case t.type
-        when :regexp                then out << AdaptedToken.new(:REGEX, t.value); i += 1
+        when :regexp              then out << AdaptedToken.new(:REGEX, t.value); i += 1
         when :char, :invalid_char then out << AdaptedToken.new(:CHAR, t.value); i += 1
         when :escaped_char        then out << AdaptedToken.new(:ESCAPED_CHAR, t.value); i += 1
         when :name                then out << AdaptedToken.new(:NAME, t.value); i += 1

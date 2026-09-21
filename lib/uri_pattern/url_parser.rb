@@ -1,6 +1,5 @@
 # frozen_string_literal: true
 
-require "uri"
 require "uri/whatwg_parser"
 
 class URIPattern
@@ -9,80 +8,78 @@ class URIPattern
 
     # Indices in the array returned by URI::WhatwgParser#split:
     # [scheme, userinfo, host, port, nil, path, opaque_path, query, fragment]
-    WHATWG_SCHEME      = 0
-    WHATWG_USERINFO    = 1
-    WHATWG_HOST        = 2
-    WHATWG_PORT        = 3
-    WHATWG_PATH        = 5
-    WHATWG_OPAQUE_PATH = 6
-    WHATWG_QUERY       = 7
-    WHATWG_FRAGMENT    = 8
+    SCHEME      = 0
+    USERINFO    = 1
+    HOST        = 2
+    PORT        = 3
+    PATH        = 5
+    OPAQUE_PATH = 6
+    QUERY       = 7
+    FRAGMENT    = 8
 
-    DEFAULT_PORTS = {
-      "http"  => 80,
-      "https" => 443,
-      "ws"    => 80,
-      "wss"   => 443,
-      "ftp"   => 21
-    }.freeze
+    DEFAULT_PORTS = URI::WhatwgParser::SPECIAL_SCHEME.reject{ |_, v| v.nil? }.freeze
+    SPECIAL_SCHEMES_SET = Set.new(URI::WhatwgParser::SPECIAL_SCHEME.keys).freeze
 
-    SPECIAL_SCHEMES_SET = Set.new(%w[http https ws wss ftp file]).freeze
+    # Whether a compiled component pattern can match at least one special scheme
+    # name.
+    def special_scheme_pattern?(component_pattern)
+      SPECIAL_SCHEMES_SET.any? { |scheme| component_pattern.match(scheme) }
+    end
+
+    AUTHORITY_KEYS = %i[hostname username password port].freeze
+
+    # Whether none of the authority components (hostname/username/password/port)
+    # are set.
+    def authority_empty?(components)
+      AUTHORITY_KEYS.all? { |k| components[k].to_s.empty? }
+    end
 
     # --- "dummy URL" canonicalization of a fixed pattern run --------------------
     #
     # The WHATWG URLPattern spec canonicalizes each fixed-text part of a pattern by
     # running it through a throwaway ("dummy") URL, so the URL parser applies the
     # exact spec percent-encode set and (for pathname) dot-segment handling. We
-    # delegate here instead of maintaining encode-set tables by hand, which both
-    # simplifies the code and tracks the spec precisely.
+    # delegate here instead of maintaining encode-set tables by hand.
     #
-    # DUMMY_URL is the spec's "create a dummy URL" input verbatim
-    # (https://urlpattern.spec.whatwg.org/ — "Let dummyInput be `https://dummy.invalid/`").
+    # DUMMY_URL is the spec's "create a dummy URL" input verbatim.
     DUMMY_URL = "https://dummy.invalid/"
 
-    # Parse the dummy URL once and hand out dups. Re-running the basic URL parser on
-    # every canonicalization is the dominant cost here (~13x a dup); the component
-    # setters reassign their ivars rather than mutating in place, so dups never
-    # corrupt the shared template (verified across all five setters).
     DUMMY_URL_TEMPLATE = URI::WHATWG_PARSER.parse(DUMMY_URL)
 
-    # No-encode fast paths (cf. PATHNAME_NO_ENCODE_RE): each encode set acts per code
-    # point, and — unlike pathname — these components have no cross-character
-    # transform (no dot-segments). So a run made solely of code points that are NOT
-    # in the component's percent-encode set, and that carry no positional meaning,
-    # needs no encoding and is returned unchanged by the URL parser; we can skip the
-    # dummy-URL parse (~70x). Each class below is printable ASCII minus exactly that
-    # encode set:
+    # No-encode fast paths (cf. PATHNAME_NO_ENCODE_RE): these encode sets act per
+    # code point with no cross-character transform, so a run made solely of code
+    # points outside the component's encode set is returned unchanged by the URL
+    # parser and the dummy-URL parse can be skipped (~70x). Each class below is
+    # printable ASCII minus exactly that encode set:
     #   search:   special-query set ("\"#'<>") + the "?" query terminator
     #   hash:     fragment set ("\"#<>`")  ("#" cannot survive a fragment run)
     #   userinfo: userinfo set ("\"#/:;<=>?@[\\]^`{|}"), used for username & password
-    # These classes were derived to equal the parser's true no-encode set exactly and
-    # confirmed identical over large random-run fuzzing; broaden only with re-checks.
+    # These classes were confirmed identical to the parser's true no-encode set over
+    # large random-run fuzzing; broaden only with re-checks.
     SEARCH_NO_ENCODE_RE   = /\A[\x21-\x7e&&[^"#'<>?]]*\z/
     HASH_NO_ENCODE_RE     = /\A[\x21-\x7e&&[^"#<>`]]*\z/
     USERINFO_NO_ENCODE_RE = /\A[\x21-\x7e&&[^"#\/:;<=>?@\[\\\]^`{|}]]*\z/
 
     # A non-opaque pathname run made only of these code points (note: no ".", so no
     # dot-segments; no "?"/"#", so no termination; none in the path percent-encode
-    # set) needs no encoding and is returned unchanged by the URL parser. Skipping
-    # the parse for such runs — the common case, e.g. "/users/" — is a large
-    # construction-time win.
+    # set) needs no encoding. Skipping the parse for such runs — the common case,
+    # e.g. "/users/" — is a large construction-time win.
     PATHNAME_NO_ENCODE_RE = %r{\A[A-Za-z0-9\-_~/]*\z}
 
     def split_components(url, base_url: nil)
       url = resolve(url, base_url) if base_url && !url.empty?
       parsed = URI::WHATWG_PARSER.split(url)
-      userinfo = parsed[WHATWG_USERINFO] || ""
+      userinfo = parsed[USERINFO] || ""
       user, pass = userinfo.include?(":") ? userinfo.split(":", 2) : [userinfo, nil]
       {
-        protocol: parsed[WHATWG_SCHEME] || "",
+        protocol: parsed[SCHEME] || "",
         username: user || "",
         password: pass || "",
-        hostname: parsed[WHATWG_HOST] || "",
-        port:     parsed[WHATWG_PORT] ? parsed[WHATWG_PORT].to_s : "",
-        pathname: parsed[WHATWG_PATH] || parsed[WHATWG_OPAQUE_PATH] || "",
-        query:    parsed[WHATWG_QUERY] || "",
-        fragment: parsed[WHATWG_FRAGMENT] || ""
+        hostname: parsed[HOST] || "",
+        port:     parsed[PORT] ? parsed[PORT].to_s : "",
+        pathname: parsed[PATH] || parsed[OPAQUE_PATH] || "",
+        query:    parsed[QUERY] || "",
+        fragment: parsed[FRAGMENT] || ""
       }
     rescue URIPattern::Error
       raise
@@ -96,12 +93,9 @@ class URIPattern
       raise URIPattern::Error, "Failed to resolve URL: #{e.message}"
     end
 
-    # Parse a constructor string into its eight pattern components, following the
+    # Parse a constructor string following the
     # WHATWG URLPattern "parse a constructor string" algorithm:
     # https://urlpattern.spec.whatwg.org/#constructor-string-parsing
-    #
-    # Returns a hash keyed by the eight component symbols. A component that does not
-    # appear in the input is left as nil so that defaults can be applied downstream.
     def split_pattern(pattern)
       tokens = URIPattern::Tokenizer.new(pattern, policy: :lenient).tokenize
       raw = ConstructorStringParser.new(pattern, tokens).parse
@@ -117,9 +111,8 @@ class URIPattern
       }
     end
 
-    # Normalize a port string for use as a match input component.
-    # Strips tabs, takes leading numeric digits, and suppresses the default port.
-    # Returns nil if the port string has no leading digits (parse failure).
+    # Normalize a port string for use as a match input component: strip tabs, take
+    # leading digits, suppress the default port. Returns nil on a parse failure.
     def normalize_port_input(port_str, protocol = "")
       port = port_str.to_s.gsub(/[\t\f]/, "")
       digits = port.match(/\A\d*/)[0]
@@ -134,7 +127,7 @@ class URIPattern
       return "" if hostname.nil? || hostname.empty?
       h = hostname.gsub(/[\r\n\t]/, "")
       return "" if h.empty?
-      URI::WHATWG_PARSER.split("https://#{h}/")[WHATWG_HOST] || h
+      URI::WHATWG_PARSER.split("https://#{h}/")[HOST] || h
     rescue
       h
     end
@@ -144,43 +137,44 @@ class URIPattern
     def normalize_hash_input(hash)
       protocol = hash[:protocol].to_s.downcase
       # Opaque path: non-special scheme, no username/password/hostname/port set
-      opaque_path = !protocol.empty? && !SPECIAL_SCHEMES_SET.include?(protocol) &&
-                    (hash[:hostname].nil? || hash[:hostname].to_s.empty?) &&
-                    (hash[:username].nil? || hash[:username].to_s.empty?) &&
-                    (hash[:password].nil? || hash[:password].to_s.empty?) &&
-                    (hash[:port].nil? || hash[:port].to_s.empty?)
+      opaque_path = !protocol.empty? && !SPECIAL_SCHEMES_SET.include?(protocol) && authority_empty?(hash)
       result = {}
       hash.each do |k, v|
-        result[k] = case k
-        when :protocol
-          norm = canonicalize_protocol_input(v.to_s)
-          return nil if norm.nil?
-          norm
-        when :port
-          norm = normalize_port_input(v.to_s, protocol)
-          return nil if norm.nil?
-          norm
-        when :pathname
-          canonicalize_pathname_run(v.to_s, opaque_path: opaque_path)
-        when :hostname
-          normalize_hostname_input(v.to_s)
-        when :username
-          canonicalize_username_run(v.to_s)
-        when :password
-          canonicalize_password_run(v.to_s)
-        when :query
-          canonicalize_search_run(v.to_s)
-        when :fragment
-          canonicalize_hash_run(v.to_s)
-        else
-          v.to_s
-        end
+        value = normalize_input_component(k, v.to_s, protocol:, opaque_path:)
+        return nil if value.nil?
+        result[k] = value
       end
       result
     end
 
+    # Normalize a single match-input hash component. Only :protocol and :port can
+    # fail (returning nil, which normalize_hash_input propagates); every other
+    # component either canonicalizes successfully or raises URIPattern::Error.
+    def normalize_input_component(key, value, protocol:, opaque_path:)
+      case key
+      when :protocol
+        canonicalize_protocol_input(value)
+      when :port
+        normalize_port_input(value, protocol)
+      when :pathname
+        canonicalize_pathname(value, opaque_path:)
+      when :hostname
+        normalize_hostname_input(value)
+      when :username
+        canonicalize_username(value)
+      when :password
+        canonicalize_password(value)
+      when :query
+        canonicalize_search(value)
+      when :fragment
+        canonicalize_hash(value)
+      else
+        value
+      end
+    end
+
     # "canonicalize a protocol" on a match input: a scheme is ASCII, starts with a
-    # letter, and contains only letters, digits, "+", "-" and ".". A value with any
+    # letter, and contains only letters, digits, "+", "-" and "."; a value with any
     # other code point (e.g. "café") cannot be a protocol, so matching fails.
     def canonicalize_protocol_input(value)
       return "" if value.empty?
@@ -191,86 +185,65 @@ class URIPattern
     # "canonicalize a protocol" on a fixed pattern run. Unlike the other components,
     # the spec explicitly does NOT use a state override here (the scheme setter would
     # enforce restrictions inappropriate for a pattern fragment); instead it parses
-    # the run as the scheme of a dummy URL through the normal entry point and reads
-    # back the validated, lowercased scheme.
-    def canonicalize_protocol_run(run)
+    # the run as the scheme of a dummy URL and reads back the lowercased scheme.
+    def canonicalize_protocol(run)
       return run if run.empty?
       parsed = URI::WHATWG_PARSER.split("#{run}://dummy.invalid/")
-      parsed[WHATWG_SCHEME].to_s
+      parsed[SCHEME].to_s
     rescue => e
       raise URIPattern::Error, "Invalid protocol #{run.inspect}: #{e.message}"
     end
 
-    # Hand out a dup of the pre-parsed dummy URL template for "dummy URL"
-    # canonicalization of a fixed pattern run.
     def dummy_url
       DUMMY_URL_TEMPLATE.dup
     end
 
-    # "canonicalize a search" / "...hash" / "...username" / "...password": the
-    # polyfill sets the corresponding URL component and reads it back. The
+    # "canonicalize a search" / "...hash" / "...username" / "...password": set the
+    # corresponding URL component on a dummy URL and read it back, so the
     # uri-whatwg_parser setters run the basic URL parser with the matching state
-    # override and apply the spec encode sets (special-query for search, userinfo
-    # for username/password, etc.).
-    def canonicalize_search_run(run)
-      return run if run.match?(SEARCH_NO_ENCODE_RE)
+    # override and encode set. All four share the same shape, factored into
+    # canonicalize_via_dummy_url below.
+    DUMMY_CANONICALIZERS = {
+      search:   [SEARCH_NO_ENCODE_RE,   :query=,    :query],
+      hash:     [HASH_NO_ENCODE_RE,     :fragment=, :fragment],
+      username: [USERINFO_NO_ENCODE_RE, :user=,     :user],
+      password: [USERINFO_NO_ENCODE_RE, :password=, :password]
+    }.freeze
+
+    def canonicalize_via_dummy_url(kind, run)
+      no_encode, writer, reader = DUMMY_CANONICALIZERS.fetch(kind)
+      return run if run.match?(no_encode)
       u = dummy_url
-      u.query = run
-      u.query.to_s
+      u.public_send(writer, run)
+      u.public_send(reader).to_s
     rescue => e
-      raise URIPattern::Error, "Invalid search #{run.inspect}: #{e.message}"
+      raise URIPattern::Error, "Invalid #{kind} #{run.inspect}: #{e.message}"
     end
 
-    def canonicalize_hash_run(run)
-      return run if run.match?(HASH_NO_ENCODE_RE)
-      u = dummy_url
-      u.fragment = run
-      u.fragment.to_s
-    rescue => e
-      raise URIPattern::Error, "Invalid hash #{run.inspect}: #{e.message}"
-    end
-
-    def canonicalize_username_run(run)
-      return run if run.match?(USERINFO_NO_ENCODE_RE)
-      u = dummy_url
-      u.user = run
-      u.user.to_s
-    rescue => e
-      raise URIPattern::Error, "Invalid username #{run.inspect}: #{e.message}"
-    end
-
-    def canonicalize_password_run(run)
-      return run if run.match?(USERINFO_NO_ENCODE_RE)
-      u = dummy_url
-      u.password = run
-      u.password.to_s
-    rescue => e
-      raise URIPattern::Error, "Invalid password #{run.inspect}: #{e.message}"
-    end
+    def canonicalize_search(run)   = canonicalize_via_dummy_url(:search, run)
+    def canonicalize_hash(run)     = canonicalize_via_dummy_url(:hash, run)
+    def canonicalize_username(run) = canonicalize_via_dummy_url(:username, run)
+    def canonicalize_password(run) = canonicalize_via_dummy_url(:password, run)
 
     # "canonicalize a pathname" / "canonicalize an opaque pathname": run the fixed
     # text through a dummy URL with the spec's per-component state override rather
-    # than a full URL parse, so the basic URL parser applies the path/opaque-path
-    # state exactly as https://urlpattern.spec.whatwg.org/ defines.
-    def canonicalize_pathname_run(run, opaque_path: false)
+    # than a full URL parse.
+    def canonicalize_pathname(run, opaque_path: false)
       return run if run.empty?
       return run if !opaque_path && run.match?(PATHNAME_NO_ENCODE_RE)
       if opaque_path
-        # "canonicalize an opaque pathname": parse the run with OPAQUE PATH STATE as
-        # the state override. uri-whatwg_parser has no opaque-path setter, but
-        # parsing "data:" + run routes the run straight through opaque path state
-        # (which percent-encodes with the C0-control set and terminates on "?"/"#"
-        # regardless of state override), giving the identical result.
+        # uri-whatwg_parser has no opaque-path setter, but parsing "data:" + run
+        # routes the run straight through opaque path state (C0-control encode set,
+        # terminating on "?"/"#" regardless of state override), giving the identical
+        # result.
         parsed = URI::WHATWG_PARSER.split("data:#{run}")
-        (parsed[WHATWG_OPAQUE_PATH] || parsed[WHATWG_PATH]).to_s
+        (parsed[OPAQUE_PATH] || parsed[PATH]).to_s
       else
-        # "canonicalize a pathname": run the fixed text through the basic URL parser
-        # with PATH START STATE as the state override (uri-whatwg_parser's path=
-        # setter calls split(..., state_override: :path_start_state)). With the
-        # override set, "?"/"#" are part of the path and percent-encoded instead of
-        # terminating it. The spec prepends "/-" to a non-"/"-prefixed run so the
-        # parser does not add its own leading slash (and the "-" stops a leading dot
-        # from collapsing); both inserted characters are dropped from the result.
+        # PATH START STATE as the state override (uri-whatwg_parser's path= setter),
+        # so "?"/"#" are part of the path and percent-encoded instead of terminating
+        # it. The spec prepends "/-" to a non-"/"-prefixed run so the parser does not
+        # add its own leading slash (and the "-" stops a leading dot from
+        # collapsing); both inserted characters are dropped from the result.
         lead = run.start_with?("/")
         modified = lead ? run : "/-#{run}"
         u = dummy_url
@@ -286,15 +259,12 @@ class URIPattern
   # Implements the WHATWG URLPattern "constructor string parser" state machine.
   # https://urlpattern.spec.whatwg.org/#constructor-string-parsing
   #
-  # Walks the (regexp-coalesced) token list with a state machine, recording each
-  # component into `result` as it is delimited. Component keys use the spec names
-  # (`:search` / `:hash`); URLParser.split_pattern maps them to `:query` / `:fragment`.
+  # Component keys use the spec names (`:search` / `:hash`); URLParser.split_pattern
+  # maps them to `:query` / `:fragment`.
   class ConstructorStringParser
     NON_SPECIAL_CHAR_TYPES = %i[char escaped_char invalid_char].freeze
     SEARCH_PREFIX_BLOCKERS = %i[name regexp close asterisk].freeze
 
-    # State sets for apply_implicit_defaults, hoisted to frozen constants so a
-    # state transition does not allocate fresh arrays for each `.include?` check.
     HOSTNAME_DEFAULT_FROM = %i[protocol authority username password].freeze
     HOSTNAME_DEFAULT_TO = %i[port pathname search hash].freeze
     PATHNAME_DEFAULT_FROM = %i[protocol authority username password hostname port].freeze
@@ -303,10 +273,9 @@ class URIPattern
     # States that do not correspond to a stored component string in change_state.
     NON_COMPONENT_STATES = %i[init authority done].freeze
 
-    # A protocol made of only scheme code points (no pattern metacharacters)
-    # compiles to an anchored exact-match regexp, so it is a special scheme iff it
-    # equals one verbatim (case-sensitive, like the regexp). Skip building a whole
-    # ComponentPattern + Regexp in that common case.
+    # A protocol made of only scheme code points (no pattern metacharacters) compiles
+    # to an anchored exact-match regexp, so it is a special scheme iff it equals one
+    # verbatim — skip building a whole ComponentPattern + Regexp in that case.
     LITERAL_SCHEME_RE = /\A[a-zA-Z0-9+.\-]+\z/
 
     def initialize(input, tokens)
@@ -327,44 +296,17 @@ class URIPattern
         @token_increment = 1
 
         if current.type == :end
-          case @state
-          when :init
-            rewind
-            if hash_prefix?
-              change_state(:hash, 1)
-            elsif search_prefix?
-              change_state(:search, 1)
-            else
-              change_state(:pathname, 0)
-            end
-            @token_index += @token_increment
-            next
-          when :authority
-            rewind_and_set_state(:hostname)
-            @token_index += @token_increment
-            next
-          else
-            change_state(:done, 0)
-            break
-          end
-        end
-
-        if group_open?
+          break unless step_end_state
+        elsif group_open?
           @group_depth += 1
-          @token_index += @token_increment
-          next
-        end
-
-        if @group_depth.positive?
+        elsif @group_depth.positive?
           if group_close?
             @group_depth -= 1
-          else
-            @token_index += @token_increment
-            next
+            step_state
           end
+        else
+          step_state
         end
-
-        step_state
 
         @token_index += @token_increment
       end
@@ -374,6 +316,31 @@ class URIPattern
     end
 
     private
+
+    # Handle the trailing :end token. :init and :authority still have a component to
+    # close out (rewinding to re-derive it from what follows), so they return true
+    # and let the main loop's token_index bump apply; any other state finalizes the
+    # last component and returns false to stop the loop.
+    def step_end_state
+      case @state
+      when :init
+        rewind
+        if hash_prefix?
+          change_state(:hash, 1)
+        elsif search_prefix?
+          change_state(:search, 1)
+        else
+          change_state(:pathname, 0)
+        end
+        true
+      when :authority
+        rewind_and_set_state(:hostname)
+        true
+      else
+        change_state(:done, 0)
+        false
+      end
+    end
 
     def step_state
       case @state
@@ -465,16 +432,16 @@ class URIPattern
       NON_SPECIAL_CHAR_TYPES.include?(token.type)
     end
 
-    def protocol_suffix?    = non_special_pattern_char?(@token_index, ":")
+    def protocol_suffix?     = non_special_pattern_char?(@token_index, ":")
     def identity_terminator? = non_special_pattern_char?(@token_index, "@")
-    def password_prefix?    = non_special_pattern_char?(@token_index, ":")
-    def port_prefix?        = non_special_pattern_char?(@token_index, ":")
-    def pathname_start?     = non_special_pattern_char?(@token_index, "/")
-    def hash_prefix?        = non_special_pattern_char?(@token_index, "#")
-    def ipv6_open?          = non_special_pattern_char?(@token_index, "[")
-    def ipv6_close?         = non_special_pattern_char?(@token_index, "]")
-    def group_open?         = current.type == :open
-    def group_close?        = current.type == :close
+    def password_prefix?     = non_special_pattern_char?(@token_index, ":")
+    def port_prefix?         = non_special_pattern_char?(@token_index, ":")
+    def pathname_start?      = non_special_pattern_char?(@token_index, "/")
+    def hash_prefix?         = non_special_pattern_char?(@token_index, "#")
+    def ipv6_open?           = non_special_pattern_char?(@token_index, "[")
+    def ipv6_close?          = non_special_pattern_char?(@token_index, "]")
+    def group_open?          = current.type == :open
+    def group_close?         = current.type == :close
 
     def search_prefix?
       return true if non_special_pattern_char?(@token_index, "?")
@@ -487,8 +454,7 @@ class URIPattern
     end
 
     def next_is_authority_slashes?
-      non_special_pattern_char?(@token_index + 1, "/") &&
-        non_special_pattern_char?(@token_index + 2, "/")
+      non_special_pattern_char?(@token_index + 1, "/") && non_special_pattern_char?(@token_index + 2, "/")
     end
 
     def change_state(new_state, skip)
@@ -502,8 +468,7 @@ class URIPattern
     end
 
     # Advance to +new_state+, skipping +skip+ tokens and marking the new component's
-    # start, without finalizing the current component or applying defaults. Mirrors
-    # the spec/polyfill "change state without setting component" helper.
+    # start, without finalizing the current component or applying defaults.
     def change_state_without_setting_component(new_state, skip)
       @state = new_state
       @token_index += skip
@@ -512,9 +477,9 @@ class URIPattern
     end
 
     # When a transition skips over earlier components, those components still need a
-    # value. Per the spec's constructor-string parser, jumping from an authority-side
-    # state straight to a later one fills the skipped slots with their defaults
-    # (empty, or "/" for a special-scheme pathname). Driven by @state -> new_state.
+    # When a transition skips over earlier components, those components still need a
+    # value: per the spec's constructor-string parser, the skipped slots get their
+    # defaults (empty, or "/" for a special-scheme pathname).
     def apply_implicit_defaults(new_state)
       if HOSTNAME_DEFAULT_FROM.include?(@state) &&
          HOSTNAME_DEFAULT_TO.include?(new_state) &&
@@ -552,13 +517,12 @@ class URIPattern
     def compute_protocol_matches_special_scheme
       protocol_string = make_component_string
       if protocol_string.match?(LITERAL_SCHEME_RE)
-        # Schemes are case-insensitive: "canonicalize a protocol" lowercases, so
-        # compare the lowercased run against the special-scheme set.
+        # Schemes are case-insensitive: "canonicalize a protocol" lowercases.
         @protocol_special = URLParser::SPECIAL_SCHEMES_SET.include?(protocol_string.downcase)
         return
       end
       compiled = URIPattern::ComponentPattern.new(protocol_string, component: :protocol)
-      @protocol_special = URLParser::SPECIAL_SCHEMES_SET.any? { |scheme| compiled.match(scheme) }
+      @protocol_special = URLParser.special_scheme_pattern?(compiled)
     rescue URIPattern::Error
       @protocol_special = false
     end
